@@ -291,7 +291,7 @@ def simulate(infodict,
         #chrs='chr1,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr2,chr20,chr21,chr22,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chrX,chrY'
         write2file(F'samtools merge -f - ' + ' '.join(minor_gen_bams + major_gen_bams)
                +F' | samtools sort -n -o - - | samtools fixmate -u - - | samtools view -bhu -e \'flag.paired\' -F 12 '
-               +F' | samtools sort -o {inst3from2simbam} - && samtools index {inst3from2simbam}', shfile, inst2into3script)
+               +F' | samtools sort -o {inst3from2simbam} - && samtools index {inst3from2simbam} && samtools stats {inst3from2simbam} > {inst3from2simbam}.stats', shfile, inst2into3script)
         #write2file(F'samtools view -F 0x400 -o {inst3from2dedupb} {inst3from2simbam} && samtools index {inst3from2dedupb}', shfile, inst2into3script)
         if is_diploid:
             write2file(F'echo approx_truth_bed={inst3from2simbed} for cell_line={cell_line} ploidy=diploid   cell_type=normal simulating {inst3from2simbam}', shfile, inst2into3script)
