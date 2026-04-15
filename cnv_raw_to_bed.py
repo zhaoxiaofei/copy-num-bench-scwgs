@@ -12,10 +12,19 @@ def main():
     parser.add_argument('--caller', type=str, required=True, help='Single-cell copy-number caller (can be set to hmmcopy, ginkgo, etc.). ')
     parser.add_argument('--sample', type=str, required=True, help='Keyword that can uniquely identify a sample (for example, SRR927014). ')
     parser.add_argument('--dp', action='store_true', help='Keyword that can uniquely identify a sample (for example, SRR927014). ')
+    parser.add_argument('--fai', type=str, default='', help='The fai (fasta index) file of the reference')
 
     # parser.add_argument('--infile', type=str, required=True, help='The input file. ') 
     args = parser.parse_args()
     
+    chrom_sizes = {}
+    if args.fai:
+        with open(args.fai) as file:
+            for line in file:
+                toks = line.strip().split()
+                chrom_name = str(toks[0].strip('"').strip("'"))
+                chrom_size = int(toks[1].strip('"').strip("'"))
+                chrom_sizes[chrom_name] = chrom_size
     bed_header = '\t'.join(['#chr_37', 'start_37', 'end_37', ('obsDP' if args.dp else 'obsCN')])
     print(bed_header)
     
@@ -191,7 +200,131 @@ def main():
                     print(F'{tokens[0]}\t{tokens[1]}\t{tokens[2]}\t{prefixCN}{RDR}')
                 else:
                     print(F'{tokens[0]}\t{tokens[1]}\t{tokens[2]}\t{prefixCN}{majorCN+minorCN}')
+    elif args.caller == 'alleloscope':
+        '''
+        File: allelo_out.csv  (output of simplerun_alleloscope_v21.R)
+        Content (CSV with header):
+          cell,chrN:start-end_rho_hat,...,chrN:start-end_theta_hat,...,chrN:start-end_genotype_state,...
+          cellname1,1.02,...,0.51,...,3,...
+
+        rho_hat ≈ total_CN / 2  (1.0 = diploid)
+        genotype_state: 1=homdel(CN0), 2=LOH(CN1), 3=diploid(CN2),
+                        4=cnLOH(CN2), 5=gain(CN3), 6=amp(CN4)
+        For --dp mode: output rho_hat * 2 (continuous CN estimate)
+        For int mode:  output round(rho_hat * 2)
+        '''
+        import csv as csv_mod
+        reader = csv_mod.DictReader(sys.stdin)
+        # Find the row matching --sample
+        for row in reader:
+            cell = row.get('cell', '')
+            if args.sample not in cell:
+                continue
+            # Extract rho_hat columns (they contain the CN signal)
+            for col_name, col_val in row.items():
+                if '_rho_hat' not in col_name:
+                    continue
+                # Column name format: "chrN:start-end_rho_hat"
+                region_str = col_name.replace('_rho_hat', '')
+                chrom = region_str.split(':')[0]
+                coords = region_str.split(':')[1]
+                start = myint(coords.split('-')[0])
+                end   = myint(coords.split('-')[1])
+                rho = float(col_val)
+                cn_continuous = rho * 2.0
+                if args.dp:
+                    print(F'{chrom}\t{start}\t{end}\t{prefixCN}{cn_continuous}')
+                else:
+                    print(F'{chrom}\t{start}\t{end}\t{prefixCN}{round(cn_continuous)}')
+            break  # only one matching row needed
+    elif args.caller == 'aneufinder':
+        # Decompressed BED from AneuFinder: multiple tracks, each with lines like:
+        # chr1	0	26000000	3-somy	0	.	0	26000000	205,0,0
+        found_sample = False
+        for line in sys.stdin:
+            if line.startswith('track '):
+                found_sample = (args.sample in line)
+                continue
+            if not found_sample:
+                continue
+            tokens = line.strip().split('\t')
+            if len(tokens) < 4:
+                continue
+            chrom = tokens[0]
+            start = myint(tokens[1])
+            end   = myint(tokens[2])
+            somy_str = tokens[3]  # e.g. "3-somy"
+            cn = float(somy_str.split('-')[0])
+            if args.dp:
+                print(F'{chrom}\t{start}\t{end}\t{prefixCN}{cn}')
+            else:
+                print(F'{chrom}\t{start}\t{end}\t{prefixCN}{myint(cn)}')
+    elif args.caller == 'flcna':
+        # FLCNA output CSV: sampleID,samplename,Cluster,chr,start,end,state,start.coor,end.coor,width_bins
+        # States: Del.d=0, Del.s=1, normal=2 (not listed), Dup.s=3, Dup.d=4
+        state2cn = {'Del.d': 0, 'Del.s': 1, 'Dup.s': 3, 'Dup.d': 4}
+        segments = []  # collect all aberrant segments first
+        for line in sys.stdin:
+            tokens = line.strip().split(',') if ',' in line else line.strip().split()
+            tokens = [t.strip('"') for t in tokens]
+            if len(tokens) < 9:
+                continue
+            if tokens[0] == 'sampleID' or tokens[1] == 'samplename':
+                continue
+            samplename = tokens[1]
+            if args.sample not in samplename:
+                continue
+            chrom = tokens[3].strip().strip('"').strip("'")
+            start = myint(tokens[7])
+            end   = myint(tokens[8])
+            state = tokens[6]
+            cn = state2cn.get(state, 2)
+            if start < end:
+                segments.append((chrom, start, end, cn))
+            else:
+                logging.warning(f'The segment {(chrom, start, end, cn)} from sample={samplename} is invalid! Skipping this segment!')
+        # Group by chromosome and sort
+        from collections import defaultdict
+        chrom_segs = defaultdict(list)
+        for chrom, start, end, cn in segments:
+            chrom_segs[chrom].append((start, end, cn))
+        for chrom in chrom_segs:
+            chrom_segs[chrom].sort()
+            segs = [seg for seg in chrom_segs[chrom]]
+            new_segs = []
+            # ensure that BED regions are non-overlapping by trimming each region if needed
+            for i in range(len(segs)):
+                max_start = segs[i][0]
+                min_end = segs[i][1]
+                for j in range(0, i, 1): max_start = max((max_start, segs[j][1]))
+                for j in range(i+1, len(segs), 1): min_end = min((min_end, segs[j][0]))
+                if max_start < min_end:
+                    new_segs.append((max_start, min_end, segs[i][2]))
+            chrom_segs[chrom] = new_segs
+        # https://sorryios.ai/chat/e0377335-c9a1-43ba-bb36-5143c3479f4a
+        # Including normal copy number regions in FLCNA benchmarking
+        # Fill gaps with CN=2
+        for chrom, segs in chrom_segs.items(): # sorted(chrom_segs.items(), key=lambda x: x[0]):
+            prev_end = 0  # or use 1 if 1-based
+            for start, end, cn in segs:
+                if start > prev_end:
+                    # gap → normal CN=2
+                    if args.dp:
+                        print(f'{chrom}\t{prev_end}\t{start}\t{prefixCN}{2.0}')
+                    else:
+                        print(f'{chrom}\t{prev_end}\t{start}\t{prefixCN}2')
+                if args.dp:
+                    print(f'{chrom}\t{start}\t{end}\t{prefixCN}{float(cn)}')
+                else:
+                    print(f'{chrom}\t{start}\t{end}\t{prefixCN}{cn}')
+                prev_end = end
+            # Optionally: tail region after last segment to chrom end
+            # if you have chrom_sizes dict:
+            if chrom_sizes:
+                assert chrom in chrom_sizes, f'The chromosome {chrom} is not in {chrom_sizes}'
+            if chrom_sizes and prev_end < chrom_sizes[chrom]:
+                print(f'{chrom}\t{prev_end}\t{chrom_sizes[chrom]}\t{prefixCN}2')
     else:
         logging.fatal(F'The copy-number caller {args.caller} is invalid!')
-        
+
 if __name__ == '__main__': main()

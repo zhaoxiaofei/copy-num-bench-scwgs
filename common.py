@@ -169,7 +169,7 @@ def list2airflow(listof_src_dst):
     script2string = {}
     dependencies = []
     visited_tasks = set([])
-    for src_dst in listof_src_dst:
+    for src_dst in sorted(listof_src_dst):
         src_script, dst_script = src_dst[0], src_dst[1]
         src_task, dst_task = script2task(src_script), script2task(dst_script)
         for script, task in zip([src_script, dst_script], [src_task, dst_task]):
@@ -192,7 +192,7 @@ def list2snakemake(listof_src_dst, allrules='all'):
     rule_to_srcs_dict = collections.defaultdict(set)
     dst_to_params_dict = {}
     dst_dones = []   
-    for src_dst in listof_src_dst:
+    for src_dst in sorted(listof_src_dst):
         src_script, dst_script = src_dst[0], src_dst[1]
         if dst_script.endswith('.rule'):
             rule_to_srcs_dict[dst_script].add(src_script)
@@ -203,7 +203,7 @@ def list2snakemake(listof_src_dst, allrules='all'):
             all_scripts.add(src_script)
             all_scripts.add(dst_script)
     
-    for dst_script in all_scripts:
+    for dst_script in sorted(all_scripts):
         src_scripts = sorted(list(dst_to_srcs_dict[dst_script]))
         dst_task = script2task(dst_script)
         dst_done = F'"{dst_script}.done"'
@@ -227,7 +227,7 @@ rule {dst_task}:
     {params}
     shell: "command time -v bash -evx {dst_script} 2> {dst_script}.stderr && (pushd {script_dir} && git rev-parse HEAD && git diff HEAD) > {dst_script}.done"'''
         rules.append(rule)
-    for dst_rulename in rule_to_srcs_dict:
+    for dst_rulename in sorted(rule_to_srcs_dict.keys()):
         dst_task = script2task(dst_rulename)
         src_scripts = sorted(list(rule_to_srcs_dict[dst_rulename]))
         rule = F'''

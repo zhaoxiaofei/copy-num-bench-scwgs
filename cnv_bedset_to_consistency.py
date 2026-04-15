@@ -214,8 +214,8 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     cmd1 = F''' bedtools intersect -header -a {pre_sim_call_bed_1_fname     } -b {post_sim_call_bed_multiinter} > {pre_sim_call_bed_1_inter} '''
     cmd2 = F''' bedtools intersect -header -a {pre_sim_call_bed_2_fname     } -b {post_sim_call_bed_multiinter} > {pre_sim_call_bed_2_inter} '''
     cmd3 = F''' bedtools intersect -header -a {approx_truth_bed_fname       } -b {post_sim_call_bed_multiinter} > {approx_truth_bed_inter  } '''
-    cmd4 = F''' bedtools intersect -header -a {post_sim_call_bed_int_fname      } -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_inter } '''    
-    cmd5 = F''' bedtools intersect -header -a {post_sim_call_bed_dep_fname} -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_by_DP_inter} '''
+    cmd4 = F''' bedtools intersect -header -a {post_sim_call_bed_int_fname  } -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_inter } '''    
+    cmd5 = F''' bedtools intersect -header -a {post_sim_call_bed_dep_fname  } -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_by_DP_inter} '''
     if not post_sim_call_bed_dep_fname: cmd5 = F'printf "Skip generating {post_sim_call_bed_by_DP_inter}\\n"'
     
     for cmd in [post_sim_call_bed_multiinter_cmd, cmd1, cmd2, cmd3, cmd4, cmd5]:

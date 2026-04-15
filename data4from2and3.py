@@ -16,8 +16,20 @@ SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT = {
     'dedup'         : {'secnv'  : ''},
     'nop' : {
     'scyn'          : '',
-    'chisel'        : '', }
+    'chisel'        : '', 
+    'flcna'         : '',
+    'aneufinder'    : '',
+    # 'alleloscope'   : '',
+    }
 }
+# The following CNV callers were affected by runtime errors that were described in the github links. 
+# 'alleloscope', # https://github.com/seasoncloud/Alleloscope/issues/16 # multiple types of errors
+# https://github.com/EngeLab/ASCENT/issues/2
+# https://github.com/elkebir-group/CNRein/issues/9 # very slow runtime too
+# https://github.com/parklab/HiScanner/issues/11   # very slow runtime too
+# https://github.com/zhyu-lab/cot/issues/1         # compiling error
+# https://github.com/zhyu-lab/rccae/issues/1       # compiling error
+# AFAIK, there are no other scWGS-based CNV callers.
 
 def dict_append(d, to_append):
     if isinstance(d, dict): return {k: dict_append(v, to_append) for k, v in sorted(d.items())}
@@ -35,7 +47,7 @@ def dict_simplify(d):
     return d
 
 
-SC_CN_EVAL_TOOLS = set(['hmmcopy', 'copynumber', 'ginkgo', 'sccnv', 'secnv', 'scyn', 'chisel'])
+SC_CN_EVAL_TOOLS = set(['hmmcopy', 'copynumber', 'ginkgo', 'sccnv', 'secnv', 'scyn', 'chisel', 'flcna', 'aneufinder'])
 
 SC_CN_TOOL_TO_RUN_MODE = {
     'readcounter' : 'parallel',
@@ -47,6 +59,9 @@ SC_CN_TOOL_TO_RUN_MODE = {
     'secnv'       : 'sequential',
     'scyn'        : 'sequential',
     'chisel'      : 'sequential',
+    'flcna'       : 'sequential',
+    'aneufinder'  : 'sequential',
+    'alleloscope' : 'sequential',
 }
 
 chrs = 'chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY'
@@ -81,7 +96,7 @@ SC_CN_TOOLS = sorted(SC_CN_TOOL_TO_RUN_ORDER.keys())
 ##   bwa, samtools, hg19
 ##   bcftools, eagleimp with eagleimp's database in the directory EAGLE_IMP_DB_DIR (if running chisel is required)
 
-def norm_tool_result(call, result_filename_1, tool, lib_1, pyscripts, result_filename_2=None, lib_from_tool=None):
+def norm_tool_result(call, result_filename_1, tool, lib_1, pyscripts, result_filename_2=None, lib_from_tool=None, ref=None):
     # (infodict, t4fromXdepcns, t4fromXintcns, result_filename_1, tool, lib_1, tobed, result_filename_2=None, lib_from_tool=None):
     if not result_filename_2: result_filename_2 = result_filename_1
     if not lib_from_tool: lib_from_tool = lib_1
@@ -93,8 +108,9 @@ def norm_tool_result(call, result_filename_1, tool, lib_1, pyscripts, result_fil
         cmdnorm = F'cat {depcns} | python {cnv_norm_with_prior} > {intcns}.overall_haploid'
     else:
         cmdnorm = F'echo Skip generating {intcns}.overall_haploid'
-    cmd1 = F'cat {result_filename_1} | python {toBed} --caller {tool} --sample {lib_from_tool} --dp 1> {depcns} && {cmdnorm} #parallel=eval.{tool}.{lib_1}.by.dep/'
-    cmd2 = F'cat {result_filename_2} | python {toBed} --caller {tool} --sample {lib_from_tool}      1> {intcns} #parallel=eval.{tool}.{lib_1}.by.int/'
+    add_args = (f'--fai {ref}.fai ' if ref else '')
+    cmd1 = F'cat {result_filename_1} | python {toBed} --caller {tool} --sample {lib_from_tool} {add_args}--dp 1> {depcns} && {cmdnorm} #parallel=eval.{tool}.{lib_1}.by.dep/'
+    cmd2 = F'cat {result_filename_2} | python {toBed} --caller {tool} --sample {lib_from_tool} {add_args}     1> {intcns} #parallel=eval.{tool}.{lib_1}.by.int/'
     
     return [cmd1] + [cmd2], [depcns, intcns]
 
@@ -102,11 +118,12 @@ def bamfilename2samplename(bam): return bam.split(os.path.sep)[-1].split('.')[0]
 
 def get_cleanup(script): return change_file_ext(script, 'cleanup.sh')
 
-def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval, rootdir, vcf, tool2script_dict, start_script, is_overall_haploid, writing_mode, visited_scripts):
+def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval, rootdir, vcf, tool2script_dict, start_script, is_overall_haploid, writing_mode, visited_scripts, normal_bams_dir=None):
     cellLine = ('hap' if is_overall_haploid else infodict['cellLine'])
     
     ref=F'{rootdir}/refs/hg19.fa'
-    bigwig='{rootdir}/refs/wgEncodeCrgMapabilityAlign36mer.bigWig'
+    bigwig=F'{rootdir}/refs/wgEncodeCrgMapabilityAlign36mer.bigWig'
+    bigwig100=F'{rootdir}/refs/wgEncodeCrgMapabilityAlign100mer.bigWig'
     window_size = 200*1000
     readcounter_bin       = F'{rootdir}/cnvguider/data3to4code/hmmcopy_utils/bin/readCounter'
     correct_read_count_py = F'{rootdir}/cnvguider/data3to4code/single_cell_pipeline-0.8.26/single_cell/workflows/hmmcopy/scripts/correct_read_count.py'
@@ -148,10 +165,17 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
         cmds.append(F'echo performed no-operation')
         for tool_next in SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT[tool]:
             script_next = tool2script_dict[tool_next]
+            # These mem_mb's are empirically measured with "command time -v"
             if tool_next == 'scyn':
                 deps.append((script, script_next, ['resources: mem_mb = 5000']))
             elif tool_next == 'chisel':
                 deps.append((script, script_next, ['resources: mem_mb = 18000']))
+            elif tool_next == 'alleloscope':
+                deps.append((script, script_next, ['resources: mem_mb = 10000']))
+            elif tool_next == 'flcna':
+                deps.append((script, script_next, ['resources: mem_mb = 40000']))
+            elif tool_next == 'aneufinder':
+                deps.append((script, script_next, ['resources: mem_mb = 8000']))
             else:
                 deps.append((script, script_next))
     elif tool in SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT:
@@ -291,6 +315,70 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             cmds2.extend(norm_cmds)
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]
+    
+    # revised by https://sorryios.ai/chat/1eb9e83b-aed2-4007-a65f-c9cd4e61b989
+    if tool == 'alleloscope':
+         alleloscope_R = F'{rootdir}/cnvguider/data3to4code/simplerun_alleloscope_v21.R'
+         allelo_tumor_dir  = F'{tmpdir}/allelo_tumor/'
+         allelo_normal_dir = F'{tmpdir}/allelo_normal/'
+         allelo_out_dir    = F'{tmpdir}/allelo_out/'
+         allelo_out_csv    = F'{tmpdir}/allelo_out.csv'
+         # Prepare: symlink tumor BAMs into allelo_tumor/
+         cmd_parts = [F'rm -r {tmpdir} || true',
+                      F'mkdir -p {allelo_tumor_dir} {allelo_normal_dir} {allelo_out_dir}']
+         for bam in bams:
+             bai = change_file_ext(bam, 'bam.bai')
+             cmd_parts.append(F'ln -sf {bam} {allelo_tumor_dir}/')
+             cmd_parts.append(F'ln -sf {bai} {allelo_tumor_dir}/')
+         # Prepare: symlink normal BAMs into allelo_normal/
+         # If normal_bams_dir is provided (post-sim case), use those;
+         # otherwise (pre-sim case), reuse the same BAMs as both tumor and normal.
+         if normal_bams_dir:
+             cmd_parts.append(F'ln -sf {normal_bams_dir}/*.bam {allelo_normal_dir}/')
+             cmd_parts.append(F'ln -sf {normal_bams_dir}/*.bam.bai {allelo_normal_dir}/')
+         else:
+             for bam in bams:
+                 bai = change_file_ext(bam, 'bam.bai')
+                 cmd_parts.append(F'ln -sf {bam} {allelo_normal_dir}/')
+                 cmd_parts.append(F'ln -sf {bai} {allelo_normal_dir}/')
+         # Run Alleloscope
+         vcf_clean = F'{allelo_out_csv}_clean.vcf.gz'
+         cmd_parts.append(f'bcftools view -m2 -M2 -v snps -O z -o {vcf_clean} {vcf}')
+         cmd_parts.append(f'bcftools index {vcf_clean}')
+         cmd_parts.append(
+             F'time -p conda run -n alleloscope Rscript {alleloscope_R}'
+             F' {allelo_tumor_dir} {allelo_normal_dir} {ref} {vcf_clean}'
+             F' {allelo_out_dir} {allelo_out_csv}'
+         )
+         cmds.append(' && '.join(cmd_parts) + F' #sequential=run.{tool}/')
+         for bam, lib, cnv in zip(bams, libs, cnvs):
+             norm_cmds, norm_beds = norm_tool_result(
+                 inbam2call[bam], allelo_out_csv, tool, lib, tobed)
+             cmds2.extend(norm_cmds)
+             bam2bed[bam] = norm_beds[1]
+             lib2bed[lib] = norm_beds[1]
+    # revised by https://sorryios.ai/chat/e62de0ac-e570-4d62-9672-1ba233c8db90
+    if tool == 'flcna':
+        flcna_R = F'{rootdir}/cnvguider/data3to4code/simplerun_flcna.R'
+        cmd = (F'rm -r {tmpdir}/flcna_input/ || true && mkdir -p {tmpdir}/flcna_input/ {tmpdir}/flcna_output/ && cp -s {" ".join(bams + bais)} {tmpdir}/flcna_input/ '
+               F' && time -p Rscript {flcna_R} {tmpdir}/flcna_input/ {ref} {tmpdir}/flcna_output/flcna_result.csv {bigwig100} #sequential=run.{tool}/')
+        cmds.append(cmd)
+        for bam, lib, cnv in zip(bams, libs, cnvs):
+            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/flcna_output/flcna_result.csv', tool, lib, tobed, ref=ref)
+            cmds2.extend(norm_cmds)
+            bam2bed[bam] = norm_beds[1]
+            lib2bed[lib] = norm_beds[1]
+    if tool == 'aneufinder':
+        aneufinder_R = F'{rootdir}/cnvguider/data3to4code/simplerun_aneufinder.R'
+        cmd = (F'rm -r {tmpdir}/aneufinder_input/ || true && mkdir -p {tmpdir}/aneufinder_input/ && cp -s {" ".join(bams + bais)} {tmpdir}/aneufinder_input/ '
+               F' && time -p Rscript {aneufinder_R} {tmpdir}/aneufinder_input/ {tmpdir}/aneufinder_input/ {tmpdir}/aneufinder_output.bed #sequential=run.{tool}/')
+        cmds.append(cmd)
+        for bam, lib, cnv in zip(bams, libs, cnvs):
+            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/aneufinder_output.bed', tool, lib, tobed)
+            cmds2.extend(norm_cmds)
+            bam2bed[bam] = norm_beds[1]
+            lib2bed[lib] = norm_beds[1]
+
     if cmds and script in visited_scripts:
         logging.info(F'  Skip generating the script {script} because it has already been generated. ')
     elif cmds:
@@ -375,11 +463,20 @@ def run_tool(infodict, df1, tool,
             post2pre_simbam[inst3from2simbam] = (inst2from1mutbam1, inst2from1mutbam2)
            
     outeval_fname = inst4into5script # os.path.dirname(data3prefix1) + F'to4.step{tool_order}_{donor}_{sampleType}_{avgSpotLen}_{tool}_eval.sh'
-    deps1, cmds1, bam2bed1, lib2bed1 = run_tool_1(infodict, tool, inbam2call1, inst2into4tmpdir, inst2into4script, inst2into4scrip2, outeval_fname,
-            rootdir, inst2from1vcf021, tool2script_dicts[0], inst1into2end, is_overall_haploid=True , writing_mode=writing_mode, visited_scripts=visited_scripts)
+
+    # For alleloscope, pre-sim BAMs serve as matched normals for post-sim runs
+    normal_bams_dir_for_postsim = None
+    if tool == 'alleloscope':
+        normal_bams_dir_for_postsim = inst2into4tmpdir + '/allelo_tumor'
+
+    deps1, cmds1, bam2bed1, lib2bed1 = run_tool_1(infodict, tool, inbam2call1, inst2into4tmpdir, inst2into4script, inst2into4scrip2, 
+            outeval_fname, rootdir, inst2from1vcf021, tool2script_dicts[0], inst1into2end, 
+            is_overall_haploid=True , writing_mode=writing_mode, visited_scripts=visited_scripts)
     tool2script_dicts[0][tool] = inst2into4script
-    deps2, cmds2, bam2bed2, lib2bed2 = run_tool_1(infodict, tool, inbam2call2, inst3into4tmpdir, inst3into4script, inst3into4scrip2, outeval_fname,
-            rootdir, inst2from1vcf021, tool2script_dicts[1], inst2into3end, is_overall_haploid=False, writing_mode=writing_mode, visited_scripts=set([]))
+    deps2, cmds2, bam2bed2, lib2bed2 = run_tool_1(infodict, tool, inbam2call2, inst3into4tmpdir, inst3into4script, inst3into4scrip2,
+            outeval_fname, rootdir, inst2from1vcf021, tool2script_dicts[1], inst2into3end, 
+            is_overall_haploid=False, writing_mode=writing_mode, visited_scripts=set([]), normal_bams_dir=normal_bams_dir_for_postsim)
+
     tool2script_dicts[1][tool] = inst3into4script
     deps3, cmds3 = [], []
     if tool in SC_CN_EVAL_TOOLS:
