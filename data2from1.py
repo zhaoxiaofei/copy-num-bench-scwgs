@@ -109,17 +109,17 @@ def main(args1=None):
                     fq22 = F'{inst1into2tmp}/{acc}_gt{GT}_2.fastq.gz'
                     fq21sorted = F'{inst1into2tmp}/{acc}_gt{GT}_1_sorted.fastq.gz'
                     fq22sorted = F'{inst1into2tmp}/{acc}_gt{GT}_2_sorted.fastq.gz'
-                    cmd3 = F'{root}/copy-num-bench/data1to2code/safesim/bin/safemut -b {bam2} -v {germvcf3} -1 {fq21} -2 {fq22} -0 {fq20} #parallel=safemut/'
+                    cmd3 = F'{root}/copy-num-bench-scwgs/data1to2code/safesim/bin/safemut -b {bam2} -v {germvcf3} -1 {fq21} -2 {fq22} -0 {fq20} #parallel=safemut/'
                     write2file(cmd3, shfile3, inst1into2sh3)
                     for fqidx, (fq, fqsorted) in enumerate([(fq21, fq21sorted), (fq22, fq22sorted)]):
                         tmpdir = F'/tmp/{acc}_gt{GT}_{fqidx+1}.sorted.tmpdir'
-                        cmd4 = F'mkdir -p {tmpdir} && {root}/copy-num-bench/data1to2code/safesim/bin/fastq-sort -n -S 4G --temporary-directory={tmpdir} <(zcat {fq}) | gzip --fast > {fqsorted} #parallel=fastq-sort/'
+                        cmd4 = F'mkdir -p {tmpdir} && {root}/copy-num-bench-scwgs/data1to2code/safesim/bin/fastq-sort -n -S 4G --temporary-directory={tmpdir} <(zcat {fq}) | gzip --fast > {fqsorted} #parallel=fastq-sort/'
                         write2file(cmd4, shfile4, inst1into2sh4)
                     cn_bams_str = ' '.join(inst2from1cnbams)
                     cmd5= (F'''(bwa mem -R "@RG\\tID:{acc}\\tSM:{SM}\\tLB:{LB}\\tPU:L001\\tPL:ILLUMINA" -t {args.bwa_ncpus} {ref} {fq21sorted} {fq22sorted} ''' 
                           +F'''| samtools fixmate -m - - | samtools sort -o - - | samtools markdup - {inst2from1mutbam} && samtools index {inst2from1mutbam})'''
                           +F''' && samtools flagstat -O json {inst2from1mutbam} > {inst2from1flagjs} '''
-                          +F''' && {root}/copy-num-bench/data1to2code/splitbam.out {inst2from1mutbam} {MAX_HAPLO_CN} {cn_bams_str} && for b in {cn_bams_str}; do samtools index $b ; done #parallel=safemut.bwa/''')
+                          +F''' && {root}/copy-num-bench-scwgs/data1to2code/splitbam.out {inst2from1mutbam} {MAX_HAPLO_CN} {cn_bams_str} && for b in {cn_bams_str}; do samtools index $b ; done #parallel=safemut.bwa/''')
                     write2file(cmd5, shfile5, inst1into2sh5)
                     ret.append((inst1into2sh5, inst1into2end))
         with cm.myopen(inst1into2end, args.writing_mode) as file_end: write2file(F'echo {inst1into2end} is done', file_end, inst1into2end)

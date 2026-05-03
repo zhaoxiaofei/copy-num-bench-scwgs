@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 if [ -z "${1}" ] ; then
-    envname=copy-num-bench;
+    envname=copy-num-bench-scwgs;
 else 
     envname=$1;
 fi
