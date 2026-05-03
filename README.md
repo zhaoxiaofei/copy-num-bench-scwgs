@@ -1,28 +1,29 @@
-This repository contains code to evaluate commonly used computational tools to estimate single-cell copy numbers (CNs) from single-cell whole-genome sequencing data (scWGS).
+This code repository evaluates nearly all computational tools to infer cell-specific copy numbers (CNs) from single-cell whole-genome sequencing data (scWGS).
 
 ### How to setup
 
 ```
-bash -evx install\_step1\_by\_conda.sh
-bash -evx install\_step2\_by\_download\_and\_setup.sh
+bash -evx install_step1_by_conda.sh
+bash -evx install_step2_by_download_and_setup.sh
 ```
 
 The above installation scripts (which includes database download) run for about one day in total in China.
 
-Then, download the FASTQ files described in scDNAaccessions.tsv (or scDNAaccessions.S04.tsv to perform a test run that is much faster than the full run) into the directory ../data/1from0.datdir/
+Then, download the FASTQ files described in scDNAaccessions.tsv (for performing a full run) or scDNAaccessions.S04.tsv (for performing a test run that is much faster than the full run) into the directory ../data/1from0.datdir/
 
-The test run takes about one day to finish running on a cluster with 200 CPUs.
+The full/test run takes about one month/day to finish running on a cluster with 200 CPUs.
 
 ### How to benchmark the tools
 
 ```
 python main.py > Snakefile # or python main.py --SraRunTable scDNAaccessions.S04.tsv > Snakefile # to perform the test run
-snakemake --cores ${NUM\_CPUS}
+snakemake --cores ${NUM_CPUS}
 # Wait for the above snakemake command to finish
 # Set BENCHMARK_RESULT_FILE_PREFIX to be the prefix of the files storing performance-evaluation results
 #   for example, BENCHMARK_RESULT_FILE_PREFIX=bench_results/bench-results-26-04-12-updated
 python cnv_gather_results.py -i ../data/*/4from3_*.datdir/*.perf.json -o ${BENCHMARK_RESULT_FILE_PREFIX}
-cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/scWGS-performances-eval.py -t 0 -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots ```
+cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/scWGS-performances-eval.py -t 0 -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots
+```
 
 ### Detail about the data
 
@@ -46,7 +47,14 @@ In brief, our benchmarking strategy satisfies two seemingly conflicting requirem
 
 <img width="900" height="300" alt="image" src="https://github.com/user-attachments/assets/2a429b0f-032f-4192-bf46-8bac16b93229" />
 
-Our results show that Ginkgo performs the best for calling copy-number variations/variants (CNVs) from single-cell whole-genome sequencing data. The metrics accuracy and PCC_intCN (i.e., Pearson correlation coefficient of intCN) measure the observed (i.e., called) versus expected (i.e., ground-truth) integer copy numbers (CNs). The metric PCC_nonintCN is the Pearson correlation coefficient of observed non-integer CN versus expected integer CN. The metric frac_cov_genome refers to the fraction of the human reference genome hg19 that is covered by the observed CN profile. The metrics breakpoint_f1score is the F1-score of detecting CN changes (i.e., breakpoints): An observed breakpoint is precise (i.e., true positive) if at least one expected breakpoint is within 200 000 base pairs of the observed breakpoint, and an expected breakpoint is recalled (i.e., true positive) if at least one observed breakpoint is within 200 000 base pairs of the expected breakpoint. Fig. S1 shows performances as a function of each performance-related factor (e.g., ploidy estimation accuracy and average sequencing depth). 
+Our results show that Ginkgo performs the best for calling copy-number variations/variants (CNVs) from single-cell whole-genome sequencing data. 
+The metrics `accuracy` and `PCC_intCN` (i.e., Pearson correlation coefficient of intCN) measure the observed (i.e., called) versus expected (i.e., ground-truth) integer copy numbers (CNs). 
+The metric `PCC_nonintCN` is the Pearson correlation coefficient of observed non-integer CN versus expected integer CN. 
+The metric `frac_cov_genome` refers to the fraction of the human reference genome hg19 that is covered by the observed CN profile. 
+The metrics `breakpoint_f1score` is the F1-score of detecting CN changes (i.e., breakpoints): 
+An observed breakpoint is precise (i.e., true positive) if at least one expected breakpoint is within 200 000 base pairs of the observed breakpoint, 
+and an expected breakpoint is recalled (i.e., true positive) if at least one observed breakpoint is within 200 000 base pairs of the expected breakpoint. 
+Fig. S1 shows performances as a function of each performance-related factor (e.g., ploidy estimation accuracy and average sequencing depth). 
 
 ### LICENSE
 
@@ -54,6 +62,6 @@ MIT license
 
 ### Other things
 
-Please be aware that the commercial (i.e., for profit and non-academic) use of cosmic-v97/cell\_lines\_copy\_number.csv may require licensing from cancer.sanger.ac.uk/cosmic
+Please be aware that the commercial (i.e., for profit and non-academic) use of `cosmic-v97/cell_lines_copy_number.csv` may require licensing from cancer.sanger.ac.uk/cosmic
 
 If you would like to request any additional information (e.g., details on bechmarking strategy), please send an email to: cndfeifei AT aliyun DOT com
