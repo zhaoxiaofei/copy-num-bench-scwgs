@@ -133,7 +133,7 @@ default_args = {{
 }}
 
 dag = DAG(
-    dag_id="cnvguider",
+    dag_id="copy-num-bench",
     schedule="0 0 * * *",
     catchup=False,
     default_args=default_args,

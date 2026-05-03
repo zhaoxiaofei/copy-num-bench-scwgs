@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 if [ -z "${1}" ] ; then
-    envname=cnvguider;
+    envname=copy-num-bench;
 else 
     envname=$1;
 fi

@@ -125,11 +125,11 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
     bigwig=F'{rootdir}/refs/wgEncodeCrgMapabilityAlign36mer.bigWig'
     bigwig100=F'{rootdir}/refs/wgEncodeCrgMapabilityAlign100mer.bigWig'
     window_size = 200*1000
-    readcounter_bin       = F'{rootdir}/cnvguider/data3to4code/hmmcopy_utils/bin/readCounter'
-    correct_read_count_py = F'{rootdir}/cnvguider/data3to4code/single_cell_pipeline-0.8.26/single_cell/workflows/hmmcopy/scripts/correct_read_count.py'
-    hmmcopy_R             = F'{rootdir}/cnvguider/data3to4code/single_cell_pipeline-0.8.26/single_cell/workflows/hmmcopy/scripts/hmmcopy_single_cell.R'
-    ginkgo_sh             = F'{rootdir}/cnvguider/data3to4code/ginkgo/cli/ginkgo.sh'
-    tobed                 =(F'{rootdir}/cnvguider/cnv_raw_to_bed.py', (F'{rootdir}/cnvguider/cnv_norm_with_prior.py' if is_overall_haploid else ''))
+    readcounter_bin       = F'{rootdir}/copy-num-bench/data3to4code/hmmcopy_utils/bin/readCounter'
+    correct_read_count_py = F'{rootdir}/copy-num-bench/data3to4code/single_cell_pipeline-0.8.26/single_cell/workflows/hmmcopy/scripts/correct_read_count.py'
+    hmmcopy_R             = F'{rootdir}/copy-num-bench/data3to4code/single_cell_pipeline-0.8.26/single_cell/workflows/hmmcopy/scripts/hmmcopy_single_cell.R'
+    ginkgo_sh             = F'{rootdir}/copy-num-bench/data3to4code/ginkgo/cli/ginkgo.sh'
+    tobed                 =(F'{rootdir}/copy-num-bench/cnv_raw_to_bed.py', (F'{rootdir}/copy-num-bench/cnv_norm_with_prior.py' if is_overall_haploid else ''))
     
     bams       = sorted(inbam2call.keys())
     subscripts = [change_file_ext(bam, F'{tool}.sh') for bam in bams]
@@ -148,7 +148,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
     bam2bed = {}
     lib2bed = {}
     
-    sccnv_py = F'{rootdir}/cnvguider/data3to4code/SCCNV/sccnv_v1.0.2.py'
+    sccnv_py = F'{rootdir}/copy-num-bench/data3to4code/SCCNV/sccnv_v1.0.2.py'
     sccnv_dir = os.path.dirname(os.path.abspath(sccnv_py))
     
     hg19bed = F'{sccnv_dir}/resource/hg19.bin500000.bed'
@@ -246,8 +246,8 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             lib2bed[lib] = norm_beds[1]
     if tool == 'copynumber':
         gamma = 40
-        collect_rc_4copynumber_py = F'{rootdir}/cnvguider/data3to4code/collect_rc_4copynumber.py'
-        CopyNumber_R = F'{rootdir}/cnvguider/data3to4code/CopyNumber.R'
+        collect_rc_4copynumber_py = F'{rootdir}/copy-num-bench/data3to4code/collect_rc_4copynumber.py'
+        CopyNumber_R = F'{rootdir}/copy-num-bench/data3to4code/CopyNumber.R'
         cmd = ' && '.join([F'cp {bam}.wig.csv {tmpdir}/{lib}.leaf.wig.csv' for bam, lib in zip(bams, libs)])
         # This code maintains compatibilty with the originally documented code from SingleCellCNABenchmark
         #for bam, lib in zip(bams, libs): 
@@ -278,7 +278,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]    
     if tool == 'secnv':
-        secnv_py = F'{rootdir}/cnvguider/data3to4code/SeCNV/Scripts/SeCNV.py'
+        secnv_py = F'{rootdir}/copy-num-bench/data3to4code/SeCNV/Scripts/SeCNV.py'
         secnv_dir = os.path.dirname(os.path.abspath(secnv_py))
         cmd = (F'''rm -r {tmpdir}/bam_dedup/ || true && mkdir -p {tmpdir}/bam_dedup/ && cp -s {' '.join(dedup_bams + dedup_bais)} {tmpdir}/bam_dedup/ '''
                F' && pushd {secnv_dir} && mkdir -p {tmpdir}/output/ && export PATH="{secnv_dir}:${{PATH}}" && time -p python {secnv_py} {tmpdir}/bam_dedup {tmpdir}/output {ref} #sequential=run.{tool}/')
@@ -292,7 +292,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
     # SCOPE2 is integrated into scyn, so scyn is run instead of SCOPE2
     if tool == 'scyn':
         cmd = (F'rm -r {tmpdir}/scyn_input/ || true && mkdir -p {tmpdir}/scyn_input/ {tmpdir}/scyn_output/ && cp -s {" ".join(bams + bais)} {tmpdir}/scyn_input/ '
-               F' && time -p python {rootdir}/cnvguider/data3to4code/simplerun_scyn.py {tmpdir}/scyn_input/ {tmpdir}/scyn_output/ {tmpdir}/scyn_output.csv #sequential=run.{tool}/')
+               F' && time -p python {rootdir}/copy-num-bench/data3to4code/simplerun_scyn.py {tmpdir}/scyn_input/ {tmpdir}/scyn_output/ {tmpdir}/scyn_output.csv #sequential=run.{tool}/')
         cmds.append(cmd)
         for lib, cnv, bam in zip(libs, cnvs, bams):
             norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/scyn_output.csv', tool, lib, tobed)
@@ -318,7 +318,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
     
     # revised by https://sorryios.ai/chat/1eb9e83b-aed2-4007-a65f-c9cd4e61b989
     if tool == 'alleloscope':
-         alleloscope_R = F'{rootdir}/cnvguider/data3to4code/simplerun_alleloscope_v21.R'
+         alleloscope_R = F'{rootdir}/copy-num-bench/data3to4code/simplerun_alleloscope_v21.R'
          allelo_tumor_dir  = F'{tmpdir}/allelo_tumor/'
          allelo_normal_dir = F'{tmpdir}/allelo_normal/'
          allelo_out_dir    = F'{tmpdir}/allelo_out/'
@@ -359,7 +359,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
              lib2bed[lib] = norm_beds[1]
     # revised by https://sorryios.ai/chat/e62de0ac-e570-4d62-9672-1ba233c8db90
     if tool == 'flcna':
-        flcna_R = F'{rootdir}/cnvguider/data3to4code/simplerun_flcna.R'
+        flcna_R = F'{rootdir}/copy-num-bench/data3to4code/simplerun_flcna.R'
         cmd = (F'rm -r {tmpdir}/flcna_input/ || true && mkdir -p {tmpdir}/flcna_input/ {tmpdir}/flcna_output/ && cp -s {" ".join(bams + bais)} {tmpdir}/flcna_input/ '
                F' && time -p Rscript {flcna_R} {tmpdir}/flcna_input/ {ref} {tmpdir}/flcna_output/flcna_result.csv {bigwig100} #sequential=run.{tool}/')
         cmds.append(cmd)
@@ -369,7 +369,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]
     if tool == 'aneufinder':
-        aneufinder_R = F'{rootdir}/cnvguider/data3to4code/simplerun_aneufinder.R'
+        aneufinder_R = F'{rootdir}/copy-num-bench/data3to4code/simplerun_aneufinder.R'
         cmd = (F'rm -r {tmpdir}/aneufinder_input/ || true && mkdir -p {tmpdir}/aneufinder_input/ && cp -s {" ".join(bams + bais)} {tmpdir}/aneufinder_input/ '
                F' && time -p Rscript {aneufinder_R} {tmpdir}/aneufinder_input/ {tmpdir}/aneufinder_input/ {tmpdir}/aneufinder_output.bed #sequential=run.{tool}/')
         cmds.append(cmd)
@@ -487,7 +487,7 @@ def run_tool(infodict, df1, tool,
                 postsim_int_bed      = inbam2call2[postsim].intCN_bed
                 postsim_dep_bed      = inbam2call2[postsim].depCN_bed
                 sim_approx_truth_bed = inbam2call2[postsim].simul_bed
-                cmd3 = F'python {rootdir}/cnvguider/cnv_bedset_to_consistency.py --pre-sim-call-bed-1 {presim_bed1} --pre-sim-call-bed-2 {presim_bed2} --approx-truth-bed {sim_approx_truth_bed} --post-sim-call-bed {postsim_int_bed} --post-sim-call-bed-by-DP {postsim_dep_bed} '
+                cmd3 = F'python {rootdir}/copy-num-bench/cnv_bedset_to_consistency.py --pre-sim-call-bed-1 {presim_bed1} --pre-sim-call-bed-2 {presim_bed2} --approx-truth-bed {sim_approx_truth_bed} --post-sim-call-bed {postsim_int_bed} --post-sim-call-bed-by-DP {postsim_dep_bed} '
                 cmds3.append(cmd3)
                 write2file(cmd3, outeval_file, outeval_fname)
         deps3.append((inst2into4scrip2, outeval_fname))
