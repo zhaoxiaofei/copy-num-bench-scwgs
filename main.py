@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--tumor-fastq', action='store_true', help=(
         'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of near-haploid germline samples). '
         'When set, only alignment + CNV calling + clustermap are run; the haplotype-mixing simulation is skipped.'))
+    parser.add_argument('--phased-vcf', default=None, help='Phased VCF file required by haplotype-aware CNV callers such as Chisel.')
     parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE,
         help='File open mode for writing commands to shell script, pass any of {cm.OVERWRITING_PREVENTION_MODES} to prevent overwriting existing scripts (or w to do not prevent such thing). ')
     # 2from1
