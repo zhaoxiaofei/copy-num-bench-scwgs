@@ -5,6 +5,8 @@ This code repository evaluates nearly all computational tools to infer cell-spec
 ```
 bash -evx install_step1_by_conda.sh
 bash -evx install_step2_by_download_and_setup.sh
+pushd data1to2code && bash -evx install_soft1to2.sh && popd
+pushd data3to4code && bash -evx install_soft3to4.sh && popd
 ```
 
 The above installation scripts (which includes database download) run for about one day in total in China.
