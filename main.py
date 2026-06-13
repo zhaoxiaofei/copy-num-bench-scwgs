@@ -1,7 +1,7 @@
 import argparse, os
 
 import common as cm
-import data2from1, data3from2, data4from2and3
+import data2from1, data3from2, data4from2and3, data_tumor
 
 from data2from1 import NUM_CPUS
 from data3from2 import cosmic_cell_lines, DOWNSAMPLE_METHODS
@@ -20,6 +20,9 @@ def main():
     parser.add_argument('--SraRunTable', type=str, default=defaultSraRunTable, help=(
             'SraRunTable in TSV format containing the columns '
             '#Run, AvgSpotLen, Library~Name, Sample~Name, sample-type, Oocyte_ID, Donor, and SRA~Study'))
+    parser.add_argument('--tumor-fastq', action='store_true', help=(
+        'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of near-haploid germline samples). '
+        'When set, only alignment + CNV calling + clustermap are run; the haplotype-mixing simulation is skipped.'))
     parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE,
         help='File open mode for writing commands to shell script, pass any of {cm.OVERWRITING_PREVENTION_MODES} to prevent overwriting existing scripts (or w to do not prevent such thing). ')
     # 2from1
@@ -30,12 +33,16 @@ def main():
     parser.add_argument('--downsample-method', choices=DOWNSAMPLE_METHODS, default=DOWNSAMPLE_METHODS[0], help='Downsampling method') # This should not be changed
     # 4from2and3
     parser.add_argument('--tools', nargs='+', default=SC_CN_TOOLS, choices=SC_CN_TOOLS, help='Software tools calling cell-specific copy numbers from from single-cell DNA-seq data')
-    
+
     parser.add_argument('--steps', nargs='+', default=EVAL_STEPS, choices=EVAL_STEPS, help='Main steps')
-    
+
     args = parser.parse_args()
-    
+
     ret = []
+    if args.tumor_fastq:
+        ret.extend(data_tumor.main(args))
+        return ret
+
     if '2from1'     in args.steps: ret.extend(data2from1.main    (args))
     if '3from2'     in args.steps: ret.extend(data3from2.main    (args))
     if '4from2and3' in args.steps: ret.extend(data4from2and3.main(args))
