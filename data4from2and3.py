@@ -22,8 +22,8 @@ SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT = {
     # 'alleloscope'   : '',
     }
 }
-# The following CNV callers were affected by runtime errors that were described in the github links. 
-# 'alleloscope', # https://github.com/seasoncloud/Alleloscope/issues/16 # multiple types of errors
+# The following CNV callers were affected by runtime errors that were described in the github links.
+# 'alleloscope', # https://github.com/seasoncloud/Alleloscope/issues/16 # multiple types of errors.
 # https://github.com/EngeLab/ASCENT/issues/2
 # https://github.com/elkebir-group/CNRein/issues/9 # very slow runtime too
 # https://github.com/parklab/HiScanner/issues/11   # very slow runtime too

@@ -38,8 +38,7 @@ t_tumor_dedupbam = '<data1to2dir>/<donor>/2from1_2_<donor>.datdir/2_<donor>_2fro
 
 t_clmap_logdir = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/'
 t_clmap_script = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_tumor_clustermap.sh'
-t_clmap_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.datdir/clustermap_<tool>_<donor>_<sampleType>_<avgSpotLen>'
-
+t_clmap_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_clustermap'
 
 def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
     """Generate align-only rules (no germline VCF, no haplotype splitting).
@@ -57,11 +56,13 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         with cm.myopen(inst_sh0, args.writing_mode) as f0:
             write2file(F'echo {inst_sh0} is started', f0, inst_sh0)
         donor_bams = []
-        for acc, LB, SM in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name']):
+        for acc, LB, SM, platform, LL in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name'], df1['Platform'], df1['LibraryLayout']):
             infodict_acc = dict(infodict, accession=str(acc))
             inst_sh1, inst_fq1, inst_fq2, tumor_bam, tumor_dedupbam = find_replace_all(
                 [cm.t1into2sh1, cm.t0into1fq1, cm.t0into1fq2, t_tumor_bam, t_tumor_dedupbam],
                 infodict_acc)
+            if LL == 'SINGLE': inst_fq2 = ''
+            else: assert LL == 'PAIRED'
             with cm.myopen(inst_sh1, args.writing_mode) as f1:
                 cmd_align = (
                     F'(bwa mem -R "@RG\\tID:{acc}\\tSM:{SM}\\tLB:{LB}\\tPU:L001\\tPL:ILLUMINA" '
@@ -85,19 +86,23 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
     return deps, donor_to_bams
 
 
-def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts):
+def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts, phased_vcf, ref):
     """For each (avgSpotLen, sample-type, donor) group and each requested CNV tool,
     generate the run-tool snakemake rules (delegated to data4from2and3.run_tool_1) and a
     clustermap rule that aggregates the resulting per-cell CNV BEDs into a heatmap.
     """
     deps = []
     df0 = df0.copy()
-    df0['sample-type'] = cm.norm_sample_type(df0)
-    grouped = df0.groupby(['AvgSpotLen', 'sample-type', 'Donor'])
+    logging.info(df0[['AvgSpotLen', 'sample-type', 'Donor']])
+    grouped = df0.groupby(['AvgSpotLen', 'sample-type', 'Donor', 'Platform'])
+    print(f'# Start iterating over df0 with columns={list(df0.columns)}')
 
-    for (avgSpotLen, sampleType, donor), df1 in sorted(grouped):
+    for (avgSpotLen, sampleType1, donor, platform), df1 in sorted(grouped):
+        sampleType = (sampleType1 + '_' + platform)
         donor_bams = donor_to_bams.get(str(donor), [])
+        print(f'# Start iterating over (avgSpotLen, sampleType, donor)={(avgSpotLen, sampleType, donor)}')
         if not donor_bams:
+            print(f'# Skipping (avgSpotLen, sampleType, donor)={(avgSpotLen, sampleType, donor)}')
             continue
         # Tool ordering matches the germline-mode: dependencies first, then dependents.
         tool2script_dict = {}
@@ -136,12 +141,12 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
             # Sentinel start: the per-donor data2from1 end script.
             start_script = find_replace_all([cm.t1into2end], {'data1to2dir': cm.get_varnames(
                 os.path.abspath(os.path.sep.join([os.path.dirname(os.path.abspath(__file__)),
-                '..', 'data'])))[1], 'donor': str(donor)})[0]
+                '..', 'real_tumor_data'])))[1], 'donor': str(donor)})[0]
 
             # Reuse the existing per-tool run/normalize logic.
             run_deps, _, _, lib2bed = d4.run_tool_1(
                 infodict, tool, inbam2call, tmpdir, script, script2,
-                clmap_script, root, vcf='', tool2script_dict=tool2script_dict,
+                clmap_script, root, vcf=phased_vcf, tool2script_dict=tool2script_dict,
                 start_script=start_script, is_overall_haploid=False,
                 writing_mode=args.writing_mode, visited_scripts=visited_scripts)
             tool2script_dict[tool] = script
@@ -153,7 +158,7 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
                 with cm.myopen(clmap_script, args.writing_mode) as cf:
                     cmd = (F'python {root}/copy-num-bench-scwgs/cnv_clustermap.py '
-                           F'-i {bed_glob} -o {clmap_prefix} --by-chrom '
+                           F'-i {bed_glob} -o {clmap_prefix} --fai {ref}.fai --bin-size 50000 '
                            F'--title "{title}" #sequential=clustermap.{tool}/')
                     write2file(cmd, cf, clmap_script)
                 deps.append((script2, clmap_script))
@@ -168,12 +173,13 @@ def main(args1=None):
     logging.basicConfig(level=logging.INFO,
         format='%(asctime)s %(pathname)s:%(lineno)d %(levelname)s - %(message)s')
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    datadir = os.path.abspath(os.path.sep.join([script_dir, '..', 'data']))
+    datadir = os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data']))
     data0to1dir, data1to2dir, data2to3dir, data2to4dir, data3to4dir, data4to5dir = cm.get_varnames(datadir)
     root = os.path.abspath(F'{script_dir}/../')
     root = os.getenv('cnvguiderRoot', root)
     ref = F'{root}/refs/hg19.fa'
     ref = os.getenv('cnvguiderRef', ref)
+    phased_vcf = f'{datadir}/HG008-N-P.phased.hg19.pos.tsv'
 
     if args1 is None:
         # Standalone use: minimal argparse stub. main.py normally fills args1 in.
@@ -184,14 +190,30 @@ def main(args1=None):
         parser.add_argument('--tools', nargs='+', default=SC_CN_TOOLS, choices=SC_CN_TOOLS)
         parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE)
         parser.add_argument('--tumor-fastq', action='store_true')
+        parser.add_argument('--phased-vcf', default=phased_vcf)
         args = parser.parse_args()
     else:
         args = args1
+        if not hasattr(args, 'phased_vcf') or not args.phased_vcf:
+            logging.info(f"Setting phased_vcf={phased_vcf} by default.")
+            args.phased_vcf = phased_vcf
 
     df0 = pd.read_csv(args.SraRunTable, sep='\t', header=0)
+
+    df0.columns = df0.columns.str.replace(' ', '~')
+    df0 = df0.astype(str).apply(lambda x: x.str.replace(' ', '-'))
+    if '#Run' not in df0.columns: df0['#Run'] = df0['Run']
+    if 'AvgSpotLen' not in df0.columns: df0['AvgSpotLen'] = 0
+    df0['AvgSpotLen'] = df0['AvgSpotLen'].replace('', 0).fillna('0')
+    if 'sample-type' not in df0.columns: df0['sample-type'] = df0['sample_type']
+    df0['sample-type'] = cm.norm_sample_type(df0)
+    if 'Donor' not in df0.columns: df0['Donor'] = df0['isolate'].str.replace(' ', '-')
+
     deps_align, donor_to_bams = _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir)
     visited_scripts = set()
-    deps_calls = _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts)
+    print(f"#Going over df_with_shape={df0.shape}")
+    deps_calls = _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts, args.phased_vcf, ref)
+    print(f"#num_deps_align={len(deps_align)} num_deps_calls={len(deps_calls)}")
     return deps_align + deps_calls
 
 
