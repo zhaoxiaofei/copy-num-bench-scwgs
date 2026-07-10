@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser(description='Transform raw single-cell copy-number calling result into the standard BED format. ')
     parser.add_argument('--caller', type=str, required=True, help='Single-cell copy-number caller (can be set to hmmcopy, ginkgo, etc.). ')
     parser.add_argument('--sample', type=str, required=True, help='Keyword that can uniquely identify a sample (for example, SRR927014). ')
-    parser.add_argument('--dp', action='store_true', help='Keyword that can uniquely identify a sample (for example, SRR927014). ')
+    parser.add_argument('--dp', action='store_true', help='Output read depth (obsDP) instead of integer copy number (obsCN). ')
     parser.add_argument('--fai', type=str, default='', help='The fai (fasta index) file of the reference')
 
     # parser.add_argument('--infile', type=str, required=True, help='The input file. ') 
@@ -107,7 +107,8 @@ def main():
                     print(F'{chrom}\t{start}\t{end}\t{prefixCN}{round(float(cn_string))}')
     elif args.caller == 'scnv':
         # SCNV has no doc, so we did not run it yet. 
-        pass
+        logging.fatal(F'The copy-number caller {args.caller} is out of the scope of this evaluation!')
+        sys.exit(1)
     elif args.caller == 'secnv':
         if args.dp:
             '''
@@ -304,7 +305,11 @@ def main():
         # https://sorryios.ai/chat/e0377335-c9a1-43ba-bb36-5143c3479f4a
         # Including normal copy number regions in FLCNA benchmarking
         # Fill gaps with CN=2
-        for chrom, segs in chrom_segs.items(): # sorted(chrom_segs.items(), key=lambda x: x[0]):
+        all_chroms = sorted(chrom_sizes) if chrom_sizes else sorted(chrom_segs)
+        # for chrom, segs in chrom_segs.items(): # sorted(chrom_segs.items(), key=lambda x: x[0]):
+        # further revised by https://sorryios.ai/chat/8d3002cb-af21-4302-9c97-1db112d059f7
+        for chrom in all_chroms:
+            segs = chrom_segs.get(chrom, [])
             prev_end = 0  # or use 1 if 1-based
             for start, end, cn in segs:
                 if start > prev_end:
@@ -326,5 +331,6 @@ def main():
                 print(f'{chrom}\t{prev_end}\t{chrom_sizes[chrom]}\t{prefixCN}2')
     else:
         logging.fatal(F'The copy-number caller {args.caller} is invalid!')
+        sys.exit(1)
 
 if __name__ == '__main__': main()

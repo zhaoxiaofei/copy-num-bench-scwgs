@@ -386,10 +386,12 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             for cmd in cmds:
                 write2file(cmd, shfile, script)
         visited_scripts.add(script)
-        deps.append((script2, F'data4from2and3_1_run_DSA_{infodict["donor"]}_{infodict["sampleType"]}_{infodict["avgSpotLen"]}.rule'))
-        deps.append((script2, F'data4from2and3_1_run_cellLine_{cellLine}.rule'))
-        deps.append((script2, F'data4from2and3_1_run_tool_{tool}.rule'))
-        deps.append((script2, F'data4from2and3_1_run_all.rule'))
+        # Bugs found and fixed by: https://sorryios.ai/chat/8d3002cb-af21-4302-9c97-1db112d059f7
+        # But there is no need to rerun since the affected rules were not run in the past
+        deps.append((script, F'data4from2and3_1_run_DSA_{infodict["donor"]}_{infodict["sampleType"]}_{infodict["avgSpotLen"]}.rule'))
+        deps.append((script, F'data4from2and3_1_run_cellLine_{cellLine}.rule'))
+        deps.append((script, F'data4from2and3_1_run_tool_{tool}.rule'))
+        deps.append((script, F'data4from2and3_1_run_all.rule'))
     if cmds2 and script2 in visited_scripts:
         logging.info(F'  Skip generating the script {script2} because it has already been generated. ')
     elif cmds2:

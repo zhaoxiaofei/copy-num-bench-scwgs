@@ -93,7 +93,7 @@ def get_varnames(default_value, varnames=['data0to1dir', 'data1to2dir', 'data2to
 
 ### OS-related variables and methods
 
-OVERWRITING_PREVENTION_MODES = ['no_overwritting', 'no']
+OVERWRITING_PREVENTION_MODES = ['no_overwriting', 'no']
 DEFAULT_WRITING_MODE = OVERWRITING_PREVENTION_MODES[0]
 def myopen(filename, mode):
     if mode in OVERWRITING_PREVENTION_MODES and os.path.exists(filename):
@@ -106,7 +106,9 @@ def myopen(filename, mode):
 
 def change_file_ext(file_path, new_extension, old_extension=''):
     base_name, old_ext = os.path.splitext(file_path)
-    if old_extension: assert old_extension == old_ext, F'File extension check: {old_extension} == {old_ext} failed!'
+    # Bug found and fixed by: https://sorryios.ai/chat/8d3002cb-af21-4302-9c97-1db112d059f7
+    # But this fix does not require any rerun since old_extension='' everywhere in the past and as of now.
+    if old_extension: assert '.'+old_extension == old_ext, F'File extension check: {old_extension} == {old_ext} failed!'
     return base_name + "." + new_extension
 
 def makedirs(args):

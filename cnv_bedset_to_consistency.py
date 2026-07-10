@@ -127,7 +127,7 @@ def merge_bed_with_cn(df, cn_col_name):
         merged.append([current_chr, current_start, current_end, current_cn])
     return pd.DataFrame(merged, columns=["chr", "start", "end", "cn"])
 
-def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200000):
+def evaluate_breakpoints_BUGGY(obs_df, obs_col, exp_df, exp_col, window_size=200_000):
     obs_df_1 = merge_bed_with_cn(obs_df, obs_col) #pd.read_csv(obs_df_1_bed, sep="\t", header=None, names=["chr", "start", "end"])
     exp_df_1 = merge_bed_with_cn(exp_df, exp_col) #pd.read_csv(exp_df_1_bed, sep="\t", header=None, names=["chr", "start", "end"])
 
@@ -135,38 +135,44 @@ def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200000):
     for chr_group, group in exp_df_1.groupby("chr"):
         exp_df_1_dict[chr_group] = group[["start", "end"]].values
 
-    TP = 0
-    FP = 0
-    FN = 0
+    #TP = 0
+    #FP = 0
+    #FN = 0
 
     exp_df_1_matched = set()
+    matched_obs = 0
 
     for _, obs_df_1_row in obs_df_1.iterrows():
         chr_obs_df_1 = obs_df_1_row["chr"]
         start_obs_df_1 = obs_df_1_row["start"]
         matched = False
-
         if chr_obs_df_1 in exp_df_1_dict:
             for exp_df_1_entry in exp_df_1_dict[chr_obs_df_1]:
                 start_exp_df_1 = exp_df_1_entry[0]
                 distance = abs(start_obs_df_1 - start_exp_df_1)
                 if distance <= window_size:
-                    TP += 1
+                    #TP += 1
                     matched = True
                     exp_df_1_matched.add((chr_obs_df_1, start_exp_df_1))
                     break  # Match to closest (optional)
 
         if not matched:
-            FP += 1
-
+            pass # FP += 1
+        else:
+            matched_obs += 1
+    '''
     for chr_exp_df_1, group in exp_df_1.groupby("chr"):
         for _, row in group.iterrows():
             start_exp_df_1 = row["start"]
             if (chr_exp_df_1, start_exp_df_1) not in exp_df_1_matched:
                 FN += 1
-
     precision = TP / (TP + FP) if (TP + FP) > 0 else 0
     recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+    '''
+    n_obs, n_exp = len(obs_df_1), len(exp_df_1)
+    TP, FP, FN = matched_obs, n_obs - matched_obs, n_exp - len(exp_df_1_matched)
+    precision = matched_obs        / n_obs if n_obs else 0
+    recall    = len(exp_df_1_matched) / n_exp if n_exp else 0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
 
     return {
@@ -181,6 +187,91 @@ def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200000):
 # Example usage
 #metrics = evaluate_breakpoints("inferCNV_breakpoints.bed", "ground_truth_dna_breakpoints.bed")
 #print(metrics)
+
+def get_breakpoints(merged_df):
+    """
+    Given a merged CN-segment bed dataframe (columns: chr, start, end, cn),
+    sorted within each chromosome, return the set of breakpoints.
+
+    A breakpoint is defined as the midpoint between the end of one region
+    and the start of the immediately following region on the same
+    chromosome:   bp = (prev_region.end + next_region.start) / 2
+
+    The very first region's start and the very last region's end are NOT
+    breakpoints (they are chromosome edges, not CN transitions).
+
+    Returns: dict {chr: sorted 1D numpy array of breakpoint positions}
+    """
+    bp_dict = {}
+    for chr_name, group in merged_df.groupby("chr"):
+        group = group.sort_values("start")
+        if len(group) < 2:
+            bp_dict[chr_name] = np.array([])
+            continue
+        ends   = group["end"].values[:-1]    # end of region i
+        starts = group["start"].values[1:]   # start of region i+1
+        bp_dict[chr_name] = np.sort((ends + starts) / 2.0)
+    return bp_dict
+
+
+def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200_000):
+    obs_df_1 = merge_bed_with_cn(obs_df, obs_col)
+    exp_df_1 = merge_bed_with_cn(exp_df, exp_col)
+
+    obs_bp_dict = get_breakpoints(obs_df_1)
+    exp_bp_dict = get_breakpoints(exp_df_1)
+
+    n_obs = sum(len(v) for v in obs_bp_dict.values())
+    n_exp = sum(len(v) for v in exp_bp_dict.values())
+
+    TP = 0
+
+    for chr_name, obs_bps in obs_bp_dict.items():
+        exp_bps = exp_bp_dict.get(chr_name, np.array([]))
+        if len(exp_bps) == 0 or len(obs_bps) == 0:
+            continue
+
+        # Build all candidate (obs_idx, exp_idx, distance) pairs within window,
+        # then greedily match closest pairs first, enforcing ONE-TO-ONE matching
+        # on both sides. This prevents many observed breakpoints from all being
+        # credited against a single expected breakpoint (which would let
+        # precision be inflated for free by spamming observed breakpoints
+        # around one true positive), and likewise prevents one observed
+        # breakpoint from being double-counted against multiple expected ones.
+        candidates = []
+        for oi, obs_bp in enumerate(obs_bps):
+            distances = np.abs(exp_bps - obs_bp)
+            within = np.where(distances <= window_size)[0]
+            for ei in within:
+                candidates.append((distances[ei], oi, ei))
+
+        candidates.sort(key=lambda x: x[0])  # closest pairs first
+
+        matched_obs_idx = set()
+        matched_exp_idx = set()
+        for dist, oi, ei in candidates:
+            if oi in matched_obs_idx or ei in matched_exp_idx:
+                continue
+            matched_obs_idx.add(oi)
+            matched_exp_idx.add(ei)
+
+        TP += len(matched_obs_idx)
+
+    FP = n_obs - TP
+    FN = n_exp - TP
+
+    precision = TP / n_obs if n_obs else 0
+    recall = TP / n_exp if n_exp else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+    return {
+        "TP": TP,
+        "FP": FP,
+        "FN": FN,
+        "precision": precision,
+        "recall": recall,
+        "f1score": f1
+    }
 
 # /mnt/e/cnv/data/S04.data2to4/SRR926960_12_sort_markdup_mut_ginkgo_intcns.bed
 # /mnt/e/cnv/data/S04_FPN_202_COLO-829.data3/SRR926953_SRR926953_12_COLO-829.approx_truth.bed
@@ -252,8 +343,14 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     obsCN_bed1_ploidy =   cns2ploidy(pre_sim_df_1['obsCN'], pre_sim_df_1[end_colname] - pre_sim_df_1[start_colname])
     obsCN_bed2_ploidy =   cns2ploidy(pre_sim_df_2['obsCN'], pre_sim_df_2[end_colname] - pre_sim_df_2[start_colname])
 
-    exact_breakpoint_metrics = evaluate_breakpoints(merged_df, 'obsCN', merged_df, 'expCN')
-    approx_breakpoint_metrics = evaluate_breakpoints(merged_df, 'obsCN', merged_df, 'approx_expCN')
+    bp_cols   = [chrom_colname, start_colname, end_colname]
+    obs_bp_df = post_sim_call_df[bp_cols + ['obsCN']].copy()
+    exp_bp_df = post_sim_call_df[bp_cols].copy()
+    exp_bp_df['expCN']        = merged_df['expCN'].values
+    exp_bp_df['approx_expCN'] = merged_df['approx_expCN'].values
+
+    exact_breakpoint_metrics  = evaluate_breakpoints(obs_bp_df, 'obsCN', exp_bp_df, 'expCN')
+    approx_breakpoint_metrics = evaluate_breakpoints(obs_bp_df, 'obsCN', exp_bp_df, 'approx_expCN')
  
     expCN_to_genome_size_accuracy_w_lin_corr_coef = {}
     for expCN_colname in ['expCN', 'approx_expCN']:

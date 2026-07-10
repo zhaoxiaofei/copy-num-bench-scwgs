@@ -170,7 +170,13 @@ def simulate(infodict,
         GRCH37_DIPLOID_BEDTABLE = GRCH37_CONST_PLOID_BEDTABLE(1, sex='M')
     elif len(cell_line.split('-')) >= 2 and cell_line.split('-')[0].lower() == 'normal' and is_female(cell_line.split('-')[1]):
         GRCH37_DIPLOID_BEDTABLE = GRCH37_CONST_PLOID_BEDTABLE(1, sex='F')
-    elif 'chrY' in subtable['chr_37'] or 'Y' in subtable['chr_37']:
+    # https://sorryios.ai/chat/8d3002cb-af21-4302-9c97-1db112d059f7
+    # Bug 5. 'chrY' in subtable['chr_37'] tests the index, not the values
+    # https://chat.deepseek.com/a/chat/s/1530c0e5-d3cd-4800-910a-efe6f83fee17
+    # https://chat.deepseek.com/share/f5ie3cbzz9286l4t9x
+    # But this bug does not change the final output, so no need to rerun this script
+    #elif 'chrY' in subtable['chr_37'] or 'Y' in subtable['chr_37']:
+    elif subtable['chr_37'].isin(['chrY', 'Y']).any():
         GRCH37_DIPLOID_BEDTABLE = GRCH37_CONST_PLOID_BEDTABLE(1, sex='M')
     else:
         GRCH37_DIPLOID_BEDTABLE = GRCH37_CONST_PLOID_BEDTABLE(1, sex='F')

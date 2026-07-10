@@ -14,7 +14,6 @@ logging.basicConfig(level=logging.DEBUG)
 def main():
     PERF_KEYS = [
         "bed_1_cn0_genome_size",
-        "bed_1_cn0_genome_size",
         "bed_1_cn1_genome_size",
         "bed_1_cn2plus_genome_size",
         "bed_2_cn0_genome_size",
@@ -50,7 +49,7 @@ def main():
     ]
     nan_keys = [
             "with_aneuploidy_aware_gametes.PCC_intCN", "with_aneuploidy_aware_gametes.PCC_nonintCN",
-            "with_haploidy_assumed_gametes.PCC_intCN", "with_aneuploidy_aware_gametes.PCC_nonintCN",
+            "with_haploidy_assumed_gametes.PCC_intCN", "with_haploidy_assumed_gametes.PCC_nonintCN",
     ]
     parser = argparse.ArgumentParser(description='Compute summary statistics related to mean (avg, sd) and median (min, Q1, Q2, Q3, max). ')
     #parser.add_argument('--caller', type=str, required=True, help='Single-cell copy-number caller (can be set to hmmcopy, ginkgo, etc.). ')
@@ -62,6 +61,9 @@ def main():
     listof_dicts = []
     for caller in ['hmmcopy', 'ginkgo', 'copynumber', 'secnv', 'sccnv', 'scyn', 'chisel', 'aneufinder', 'flcna']:
         filenames = [filename for filename in args.infiles if F'_{caller}_' in filename.split('/')[-1]]
+        if not filenames:
+            logging.fatal(F'No .perf.json files found for the caller {caller}; aborting (not skipping it)!')
+            sys.exit(1) # continue
         key2vals = collections.defaultdict(list)
         for filename in filenames:
             key2vals['Caller'].append(caller)
@@ -116,7 +118,11 @@ def main():
         long_dfs.append(caller_specific_df)
         for key in PERF_KEYS:
             vals = key2vals[key]
-            q1, q2, q3 = statistics.quantiles(vals, n=4)
+            finite_vals = [v for v in vals if isinstance(v, (int, float)) and not math.isnan(v)]
+            if len(finite_vals) >= 2:
+                q1, q2, q3 = statistics.quantiles(finite_vals, n=4)
+            else:
+                q1 = q2 = q3 = np.nan
             if key in nan_keys:
                 avg = np.nanmean(vals)
                 sd = np.nanstd(vals)
