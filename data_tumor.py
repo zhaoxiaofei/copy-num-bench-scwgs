@@ -99,7 +99,9 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
 
     for (avgSpotLen, sampleType1, donor, platform), df1 in sorted(grouped):
         sampleType = (sampleType1 + '_' + platform)
-        donor_bams = donor_to_bams.get(str(donor), [])
+        # donor_bams = donor_to_bams.get(str(donor), [])
+        accs = set(df1['#Run'].astype(str))
+        donor_bams = [b for b in donor_to_bams.get(str(donor), []) if b[0] in accs]
         print(f'# Start iterating over (avgSpotLen, sampleType, donor)={(avgSpotLen, sampleType, donor)}')
         if not donor_bams:
             print(f'# Skipping (avgSpotLen, sampleType, donor)={(avgSpotLen, sampleType, donor)}')

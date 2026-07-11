@@ -45,14 +45,14 @@ $conda run     -n $envname       pip install scyn
 #sed -i 's;all_cnv = all_cnv.append(cnv);all_cnv = pd.concat([all_cnv, cnv]);g' ${CONDA_PREFIX}/lib/python3.*/site-packages/scyn/utils.py
 
 # Install AneuFinder from Bioconductor
-$conda install -y bioconductor-aneufinder
+$conda install -n ${envname} -y bioconductor-aneufinder
 
 # Install FLCNA dependencies and FLCNA from GitHub
-$conda install -y r-base r-devtools bioconductor-genomicranges r-mclust
+$conda install -n ${envname} -y r-base r-devtools bioconductor-genomicranges r-mclust
 Rscript -e 'library(devtools); install_github("FeifeiXiao-lab/FLCNA")'
 
 # Install third-party packages to construct the reference genome aux files for FLCNA
-$conda install r-essentials \
+$conda install -n ${envname} -y r-essentials \
    bioconductor-bsgenome.hsapiens.ucsc.hg19 \
    bioconductor-genomicranges \
    bioconductor-genomeinfodb \

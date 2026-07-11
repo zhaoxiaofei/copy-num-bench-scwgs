@@ -53,6 +53,7 @@ def main():
             cn = float(tokens[sample_col_index]) if args.dp else myint(tokens[sample_col_index])
             print(F'{chrom}\t{start}\t{end}\t{prefixCN}{cn}')
     elif args.caller == 'copynumber': # output.csv
+        '''
         # CopyNumber does not provide integer copy numbers, it only provides relative signal intensity. 
         # Therefore, we assume that the last-column sample is diploid normal and estimate copy number this way. 
         sample_col_index = 0
@@ -78,6 +79,93 @@ def main():
                 normal_diploid_index = ((len(tokens)-2) if (len(tokens) - 1 == sample_col_index) else (len(tokens)-1))
                 cn_float = (float(tokens[sample_col_index]) + 1.0) / (float(tokens[normal_diploid_index]) + 1.0) * 2
                 print(F'{chrom}\t{start}\t{end}\t{prefixCN}{round(cn_float)}')
+        '''
+        # CopyNumber does not provide integer copy numbers, only relative signal intensity.
+        # We now select the normal diploid sample as the one with the lowest Median Absolute Deviation (MAD)
+        # across all genomic regions. This is more reliable than assuming the last column is normal.
+        import statistics
+
+        # Read all lines from stdin
+        lines = [line.strip() for line in sys.stdin if line.strip()]
+        if not lines:
+            sys.exit(0)
+
+        # Parse header
+        header = lines[0]
+        tokens = header.split(',')
+        # Remove possible quotes
+        tokens = [t.strip('"') for t in tokens]
+
+        # Identify sample columns: assume first 4 columns are chrom, ?, start, end
+        # (col0: chrom, col1: possibly "chr" or something, col2: start, col3: end)
+        sample_indices = [i for i in range(4, len(tokens))]  # all columns from 4 onward are samples
+        # Find the test sample column
+        sample_col_index = None
+        for idx, token in enumerate(tokens):
+            if args.sample in token:  # careful: partial match may be ambiguous; exact matching is better
+                sample_col_index = idx
+                break
+        if sample_col_index is None:
+            sys.stderr.write(f'Error: sample keyword "{args.sample}" not found in header\n')
+            sys.exit(1)
+
+        # Parse data rows
+        data_rows = []
+        for line in lines[1:]:
+            vals = line.split(',')
+            if len(vals) < 4:
+                continue
+            try:
+                chrom_index = int(vals[0])
+                start = myint(vals[2])
+                end = myint(vals[3])
+                # numeric values for all sample columns
+                sample_values = [float(vals[i]) for i in sample_indices]
+                data_rows.append((chrom_index, start, end, sample_values))
+            except (ValueError, IndexError):
+                continue
+
+        if not data_rows:
+            sys.exit(0)
+
+        # Compute MAD for each sample column across all rows
+        # For each sample index (relative to sample_indices), collect all values
+        n_samples = len(sample_indices)
+        # Transpose: list of values per sample
+        values_by_sample = [[] for _ in range(n_samples)]
+        for row in data_rows:
+            for i, val in enumerate(row[3]):
+                values_by_sample[i].append(val)
+
+        # Compute median and MAD for each sample
+        mad_list = []
+        for vals in values_by_sample:
+            median = statistics.median(vals)
+            abs_devs = [abs(v - median) for v in vals]
+            mad = statistics.median(abs_devs)
+            mad_list.append(mad)
+
+        # Select the sample with the lowest MAD as the normal diploid reference
+        normal_relative_index = min(range(n_samples), key=lambda i: mad_list[i])
+        normal_diploid_index = sample_indices[normal_relative_index]
+
+        # Now output the normalized data
+        # Chromosome mapping (same as original)
+        for chrom_index, start, end, sample_vals in data_rows:
+            chrom = ('chrX' if chrom_index == 23 else
+                     'chrY' if chrom_index == 24 else
+                     f'chr{chrom_index}')
+
+            if args.dp:
+                # In --dp mode, output raw value from the test sample without normalization
+                cn_float = sample_vals[sample_indices.index(sample_col_index)]
+                print(f'{chrom}\t{start}\t{end}\t{prefixCN}{cn_float}')
+            else:
+                # Normalize test sample by the chosen normal sample
+                test_val = sample_vals[sample_indices.index(sample_col_index)]
+                normal_val = sample_vals[normal_relative_index]
+                cn_float = (test_val + 1.0) / (normal_val + 1.0) * 2.0
+                print(f'{chrom}\t{start}\t{end}\t{prefixCN}{round(cn_float)}')
     elif args.caller == 'sccnv': 
         ''' 
         File: result.dat6_cnvsmooth.txt
@@ -124,7 +212,9 @@ def main():
                 tokens = line.strip().split()
                 if tokens[0] == 'chromosome':
                     for index, token in enumerate(tokens):
-                        if args.sample in token: sample_col_index = index
+                        if args.sample in token:
+                            assert 0 == sample_col_index
+                            sample_col_index = index
                     assert sample_col_index > 2, F'The sample keyword {args.sample} is not found!'
                     continue
                 chrom = tokens[0]

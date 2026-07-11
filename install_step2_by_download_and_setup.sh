@@ -3,7 +3,7 @@
 script_dir=$(dirname "$(realpath "$0")")
 rootdir=${script_dir}/../
 
-mkdir -p pushd ${rootdir}/refs && pushd ${rootdir}/refs
+mkdir -p ${rootdir}/refs && pushd ${rootdir}/refs
 wget -c https://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign36mer.bigWig
 wget -c https://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeCrgMapabilityAlign100mer.bigWig
 #wget -c https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz
