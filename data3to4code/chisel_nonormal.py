@@ -131,7 +131,7 @@ def parse_args():
     bwa = args.bwa
     if not bwa:
         bwa = "bwa"
-    if which(bwa) is None and not args.barcodeonly:
+    if which(bwa) is None and not getattr(args, 'barcodeonly', False):
         raise ValueError(error("bwa has not been found or is not executable!\n\nIf you are within a CHISEL conda environment ${ENV} you can install it with:\n\tconda install -c bioconda -n ${ENV} bwa\n\nOtherwise, please provide with the flag `--bwa` the full path to the directory containing bwa exacutable."))
 
 

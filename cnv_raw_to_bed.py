@@ -66,7 +66,9 @@ def main():
             assert sample_col_index > 0, F'The sample keyword {args.sample} is not found!'
             assert len(tokens) > 5, 'At least two cells are required for copynumber!'
             chrom_index = int(tokens[0])
-            chrom = F'chr{chrom_index}'
+            # the truth set does not contain chrX and chrY, so this code mod does not change the output in any way
+            chrom = ('chrX' if chrom_index == 23 else
+                     'chrY' if chrom_index == 24 else F'chr{chrom_index}')
             start = myint(tokens[2])
             end = myint(tokens[3])
             if args.dp:

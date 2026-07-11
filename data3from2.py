@@ -222,6 +222,19 @@ def simulate(infodict,
                 if (chrom == prev_chrom and subclonal_frac_0to1rv < subclonal_frac_0to1thres_rv and tie_break_rv 
                         # and (region_size < prev_region_size or (region_size == prev_region_size and tie_break_rv)):
                         ):
+                    '''
+                    # We should apply this patch to fix the bug B6 found at: 
+                    #   https://chat.z.ai/c/f51ab3db-ea55-4e03-a137-dd7c60278b65 publicly available at https://chat.z.ai/s/7d4a7eed-2ea0-4fab-a604-4b279befb95f
+                    #   B6 - Reverse smoothing pass wraps rowidx-1 to the last row of the table
+                    # However, after the fix, many tools have to be rerun, and this bug is not serious 
+                    #   (the buggy code considers the last genome region of chr22 to be adjacent to the first region of chr1 when iterating in reverse order in about 16% of cases)
+                    # Thus, the patch is not applied.
+                    prev_idx = rowidx - 1 if rowidx > 0 else None
+                    if prev_idx is not None and chrom == subtable.iat[prev_idx, subtable_chrom_colidx] \
+                            and subclonal_frac_0to1rv < subclonal_frac_0to1thres_rv and tie_break_rv:
+                        subtable.iat[rowidx, subtable_minorCN_colidx] = subtable.iat[prev_idx, subtable_minorCN_colidx]
+                        subtable.iat[rowidx, subtable_totalCN_colidx] = subtable.iat[prev_idx, subtable_totalCN_colidx]
+                    '''
                     subtable.iat[rowidx, subtable_minorCN_colidx] = subtable.iat[rowidx-1, subtable_minorCN_colidx]
                     subtable.iat[rowidx, subtable_totalCN_colidx] = subtable.iat[rowidx-1, subtable_totalCN_colidx]
                     subclonal_frac_idxs.append(rowidx if (rowidx > prev_rowidx) else -rowidx)

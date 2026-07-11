@@ -8,6 +8,7 @@ def nandiv(a, b, nan_val=np.nan):
     if b != 0: return a/b
     else: return nan_val
 
+# https://chat.z.ai/c/f51ab3db-ea55-4e03-a137-dd7c60278b65
 def intersect_intervals(set1, set2):
     result = []
     i, j = 0, 0
@@ -51,6 +52,7 @@ def change_file_ext(file_path, new_extension, old_extension=''):
 def pre_sim_df_to_obsCN_to_genome_size(pre_sim_df, start_colname, end_colname):
     obsCN_to_genome_size = [0, 0, 0]
     for obsCN, genome_size in zip(pre_sim_df['obsCN'], pre_sim_df[end_colname] - pre_sim_df[start_colname]):
+        assert obsCN >= 0, f"The obsCN={obsCN} is invalid!"
         obsCN = min((obsCN, 2))
         obsCN_to_genome_size[obsCN] += genome_size
     return obsCN_to_genome_size
@@ -357,6 +359,8 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         confusion_matrix_int = [([0]*(8+1)) for _ in range(8+1)]
         obs_exp_to_cn = collections.defaultdict()
         for obsCN, expCN, genomesize in zip(post_sim_call_df['obsCN'], merged_df[expCN_colname], post_sim_call_df[end_colname] - post_sim_call_df[start_colname]):
+            assert obsCN >= 0, f"The obsCN={obsCN} is invalid!"
+            assert expCN >= 0, f"The expCN={expCN} is invalid!"
             obsCN, expCN = min((8, obsCN)), min((8, expCN))
             confusion_matrix_int[obsCN][expCN] += genomesize
         genome_size, accuracy = cmat_to_genome_size_and_accuracy(confusion_matrix_int)
@@ -381,7 +385,8 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         expCN_to_genome_size_accuracy_w_lin_corr_coef[expCN_colname] = (genome_size, accuracy, w_lin_corr_coef_byCN, w_lin_corr_coef_byDP)
         post_sim_call_perf_cmat = change_file_ext(post_sim_call_bed_int_fname, F'perf.{expCN_colname}.confusion_matrix', 'bed')
         pd.DataFrame(confusion_matrix_int, index=[F'obsCN={i}' for i in range(8+1)], columns=[F'expCN={i}' for i in range(8+1)]).to_csv(post_sim_call_perf_cmat)
-    
+
+    assert expCN_ploidy >= 0, f"The expCN_ploidy={expCN_ploidy} is invalid!"
     #print(F'expCN_to_genome_size_accuracy_w_lin_corr_coef={expCN_to_genome_size_accuracy_w_lin_corr_coef}')
     data = {
         'pre_sim_call_bed_1'        : pre_sim_call_bed_1_fname,

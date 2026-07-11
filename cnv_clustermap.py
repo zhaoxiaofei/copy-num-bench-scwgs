@@ -109,7 +109,7 @@ def main():
     p.add_argument('--vmax',   type=int, default=6)           ### CHANGED: int, not float
     p.add_argument('--center', type=int, default=2,           ### CHANGED: diploid value
                    help='Diploid copy number used to fill NaN bins')
-    p.add_argument('--show-sample-labels', type=bool, default=1, # action='store_true',
+    p.add_argument('--show-sample-labels', type=int, default=1, # action='store_true',
                    help='Print sample names on y-axis (on by default; matches the reference figure)')
     args = p.parse_args()
 
