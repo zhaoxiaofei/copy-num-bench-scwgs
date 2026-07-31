@@ -207,9 +207,13 @@ def main(args1=None):
     if '#Run' not in df0.columns: df0['#Run'] = df0['Run']
     if 'AvgSpotLen' not in df0.columns: df0['AvgSpotLen'] = 0
     df0['AvgSpotLen'] = df0['AvgSpotLen'].replace('', 0).fillna('0')
+    if 'sample_type' not in df0.columns: df0['sample_type'] = 'NA'
     if 'sample-type' not in df0.columns: df0['sample-type'] = df0['sample_type']
     df0['sample-type'] = cm.norm_sample_type(df0)
-    if 'Donor' not in df0.columns: df0['Donor'] = df0['isolate'].str.replace(' ', '-')
+    if 'isolate' not in df0.columns: df0['isolate'] = 'NA'
+    if 'Donor' not in df0.columns:
+        if 'tissue' in df0.columns: df0['Donor'] = df0['tissue'].str.replace(' ', '-')
+        else: df0['Donor'] = df0['isolate'].str.replace(' ', '-')
 
     deps_align, donor_to_bams = _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir)
     visited_scripts = set()
