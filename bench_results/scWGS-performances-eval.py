@@ -26,14 +26,17 @@ parser1.add_argument('-o', '--output', default='scWGS-performances')
 args = parser1.parse_args()
 
 caller2desc = {
-    'chisel':     'Chisel      Nature Biotechnology         2021',
+    'aneufinder': 'AneuFinder  Genome Biology               2016',
+    'flcna'     : 'FLCNA       Genome Research              2024',
+    'chisel'    : 'Chisel      Nature Biotechnology         2021',
     'copynumber': 'CopyNumber  BMC Genomics                 2012',
-    'ginkgo':     'Ginkgo      Nature Methods               2015',
-    'hmmcopy':    'HMMcopy     Bioinformatics               2006',
-    'secnv':      'SeCNV       Briefings in Bioinformatics  2022',
-    'sccnv':      'SCCNV       Frontiers in Genetics        2020',
-    'scyn':       'SCYN/SCOPE  Cell Systems                 2020',
+    'ginkgo'    : 'Ginkgo      Nature Methods               2015',
+    'hmmcopy'   : 'HMMcopy     Bioinformatics               2006',
+    'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
+    'sccnv'     : 'SCCNV       Frontiers in Genetics        2020',
+    'scyn'      : 'SCYN/SCOPE  Cell Systems                 2020',
 }
+caller2desc = {}
 
 logscale_features = [
         'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio',
@@ -143,7 +146,7 @@ def plot_main():
     plot_ret.set_xticklabels(plot_ret.get_xticklabels(), rotation=20, ha='right')
     
     plt.savefig(args.output + '_main.pdf')
-    plt.savefig(args.output + '_main.png', dpi=600)
+    plt.savefig(args.output + '_main.png', dpi=300)
     plt.close()
 
 # https://www.doubao.com/chat/38421257704964354
@@ -207,10 +210,15 @@ def plot_grid_main():
     # --------------------------
     unique_callers = df['Caller'].unique()
     for ax, caller in zip(g.axes[-1, :], unique_callers):
-        ax.set_xlabel(caller, fontsize=10, labelpad=8)  # REAL caller label
+        caller_name = caller2desc.get(caller, caller)
+        ax.set_xlabel(caller_name, fontsize=10, labelpad=8)  # REAL caller label
         # Rotate long caller names if needed
-        ax.tick_params(axis='x', labelrotation=30)
-
+        # ax.tick_params(axis='x', labelrotation=30)
+        # Get the existing tick labels and update their properties
+        for label in ax.get_xticklabels():
+            label.set_rotation(25)       # Tilt at 25 degrees
+            label.set_ha('right')        # Anchor at the right edge
+            label.set_va('top')          # Anchor at the top edge
     # Hide all tick marks (clean look)
     for ax in g.axes.flat:
         ax.tick_params(bottom=False, left=False)
@@ -220,7 +228,7 @@ def plot_grid_main():
     # --------------------------
     plt.tight_layout()
     plt.savefig(args.output + '_final_grid.pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(args.output + '_final_grid.png', dpi=600, bbox_inches='tight')
+    plt.savefig(args.output + '_final_grid.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 import seaborn as sns
@@ -241,7 +249,7 @@ def plot_multirow_main():
 
     # Tidy dataframe
     df = pd.DataFrame({
-        'Caller': callers,
+        'Caller': [caller2desc.get(c, c) for c in callers],
         'Metric': perf_names,
         'Performance': perf_vals
     })
@@ -430,6 +438,6 @@ with PdfPages(args.output + '-all.pdf') as pdf:
         for fig1 in my_map(plot_onepage,
                 [(feature_withscale, page_num)
                 for page_num, feature_withscale in enumerate(continuous_features + categorical_features)]):
-            pdf.savefig(fig1, bbox_inches='tight', dpi=100)
+            pdf.savefig(fig1, bbox_inches='tight', dpi=75)
             plt.close(fig1)
 
