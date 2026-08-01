@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
 Pipeline for running scWGS-based CNV callers on real tumor FASTQ files.
-
 This module is a thin tumor-mode counterpart to (data2from1 + data3from2 + data4from2and3):
   * data2from1: only the BWA-MEM alignment step is performed (no germline VCF, no haplotype
     splitting, no copy-number simulation).
@@ -9,7 +8,6 @@ This module is a thin tumor-mode counterpart to (data2from1 + data3from2 + data4
   * data4from2and3: the per-tool CNV calling commands are reused via
     `data4from2and3.run_tool_1`, but the post-simulation evaluation step (which compares
     against simulated ground truth) is replaced by clustermap generation.
-
 The flow per donor / sample-type / spot-length group is:
     align FASTQ -> BAM   (one BAM per tumor cell, in a persistent datdir)
     -> run each requested CNV caller on the set of BAMs
@@ -19,7 +17,6 @@ Activated when main.py is invoked with --tumor-fastq.
 """
 import argparse, logging, os
 import pandas as pd
-
 import common as cm
 from common import find_replace_all, write2file
 import data2from1
@@ -28,21 +25,16 @@ from data4from2and3 import (
     SC_CN_TOOLS, SC_CN_EVAL_TOOLS, SC_CN_TOOL_TO_RUN_ORDER,
     SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT, ResultCN, bamfilename2samplename,
 )
-
-
 # Path templates for the tumor-mode files we add. We keep them under data1to2dir/<donor>
 # (the same place data2from1 already writes its alignment outputs) so the rest of the
 # pipeline can pick them up without changing the directory layout.
 t_tumor_bam      = '<data1to2dir>/<donor>/2from1_2_<donor>.datdir/2_<donor>_2from1_tumor_<accession>_sort_markdup.bam'
 t_tumor_dedupbam = '<data1to2dir>/<donor>/2from1_2_<donor>.datdir/2_<donor>_2from1_tumor_<accession>_sort_markdup_dedup.bam'
-
 t_clmap_logdir = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/'
 t_clmap_script = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_tumor_clustermap.sh'
 t_clmap_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_clustermap'
-
 def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
     """Generate align-only rules (no germline VCF, no haplotype splitting).
-
     Returns (snakemake-deps list, donor_to_bam_dict) where donor_to_bam_dict maps
     donor -> list of (acc, lib, sample_name, bam_path).
     """
@@ -85,7 +77,6 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         donor_to_bams[str(donor)] = donor_bams
     return deps, donor_to_bams
 
-
 def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts, phased_vcf, ref):
     """For each (avgSpotLen, sample-type, donor) group and each requested CNV tool,
     generate the run-tool snakemake rules (delegated to data4from2and3.run_tool_1) and a
@@ -96,7 +87,6 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
     logging.info(df0[['AvgSpotLen', 'sample-type', 'Donor']])
     grouped = df0.groupby(['AvgSpotLen', 'sample-type', 'Donor', 'Platform'])
     print(f'# Start iterating over df0 with columns={list(df0.columns)}')
-
     for (avgSpotLen, sampleType1, donor, platform), df1 in sorted(grouped):
         sampleType = (sampleType1 + '_' + platform)
         # donor_bams = donor_to_bams.get(str(donor), [])
@@ -124,7 +114,6 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                  cm.t4from2datdir, t_clmap_logdir, t_clmap_script, t_clmap_prefix],
                 infodict)
             cm.makedirs((logdir, tmpdir, datdir, clmap_logdir))
-
             # Build the inbam2call mapping for this group: tumor BAMs go in, per-cell CNV
             # BEDs come out (under datdir).
             inbam2call = {}
@@ -139,12 +128,10 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 inbam2call[tumor_bam] = ResultCN(
                     input_bam=tumor_bam, dedup_bam=tumor_dedupbam,
                     simul_bed='', info_json='', depCN_bed=depcns, intCN_bed=intcns)
-
             # Sentinel start: the per-donor data2from1 end script.
             start_script = find_replace_all([cm.t1into2end], {'data1to2dir': cm.get_varnames(
                 os.path.abspath(os.path.sep.join([os.path.dirname(os.path.abspath(__file__)),
                 '..', 'real_tumor_data'])))[1], 'donor': str(donor)})[0]
-
             # Reuse the existing per-tool run/normalize logic.
             run_deps, _, _, lib2bed = d4.run_tool_1(
                 infodict, tool, inbam2call, tmpdir, script, script2,
@@ -153,14 +140,14 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 writing_mode=args.writing_mode, visited_scripts=visited_scripts)
             tool2script_dict[tool] = script
             deps.extend(run_deps)
-
             # Add the clustermap step for evaluation tools (the ones that actually produce CN BEDs).
             if tool in SC_CN_EVAL_TOOLS:
                 bed_glob = F'{datdir}*intcns.bed'
                 title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
                 with cm.myopen(clmap_script, args.writing_mode) as cf:
                     cmd = (F'python {root}/copy-num-bench-scwgs/cnv_clustermap.py '
-                           F'-i {bed_glob} -o {clmap_prefix} --fai {ref}.fai --bin-size 50000 '
+                           F'-i {bed_glob} -o {clmap_prefix} --fai {ref}.fai --bin-size 1_000_000 '
+                           F'--metadata-tsv "{os.path.abspath(args.SraRunTable)}" '
                            F'--title "{title}" #sequential=clustermap.{tool}/')
                     write2file(cmd, cf, clmap_script)
                 deps.append((script2, clmap_script))
@@ -168,7 +155,6 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_tool_{tool}.rule'))
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_all.rule'))
     return deps
-
 
 def main(args1=None):
     """Entry point used by main.py when --tumor-fastq is set."""
@@ -182,7 +168,6 @@ def main(args1=None):
     ref = F'{root}/refs/hg19.fa'
     ref = os.getenv('cnvguiderRef', ref)
     phased_vcf = f'{datadir}/HG008-N-P.phased.hg19.pos.tsv'
-
     if args1 is None:
         # Standalone use: minimal argparse stub. main.py normally fills args1 in.
         parser = argparse.ArgumentParser(description='Tumor-mode pipeline (alignment + CNV calling + clustermap)',
@@ -199,9 +184,7 @@ def main(args1=None):
         if not hasattr(args, 'phased_vcf') or not args.phased_vcf:
             logging.info(f"Setting phased_vcf={phased_vcf} by default.")
             args.phased_vcf = phased_vcf
-
     df0 = pd.read_csv(args.SraRunTable, sep='\t', header=0)
-
     df0.columns = df0.columns.str.replace(' ', '~')
     df0 = df0.astype(str).apply(lambda x: x.str.replace(' ', '-'))
     if '#Run' not in df0.columns: df0['#Run'] = df0['Run']
@@ -214,7 +197,6 @@ def main(args1=None):
     if 'Donor' not in df0.columns:
         if 'tissue' in df0.columns: df0['Donor'] = df0['tissue'].str.replace(' ', '-')
         else: df0['Donor'] = df0['isolate'].str.replace(' ', '-')
-
     deps_align, donor_to_bams = _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir)
     visited_scripts = set()
     print(f"#Going over df_with_shape={df0.shape}")

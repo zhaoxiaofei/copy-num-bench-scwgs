@@ -4,7 +4,6 @@
 From https://xsimplechat.com/chat?session=ssn_zkOZ9p4TrStJ&topic=tpc_QjGSOTAvuffT
 
 Generate a clustered CNV heatmap from per-sample BED files.
-
 * Rows = samples (hierarchically clustered).
 * Columns = fixed-size genomic bins, kept in genomic order.
 * Heatmap uses *integer* copy numbers with a *discrete* colourbar.
@@ -14,7 +13,6 @@ Generate a clustered CNV heatmap from per-sample BED files.
 import argparse, glob, os, re, sys
 import numpy as np
 import pandas as pd
-
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -29,7 +27,6 @@ def chrom_sort_key(chrom):
     if c == 'Y': return 24
     try: return int(c)
     except Exception: return 99
-
 def load_bed(path):
     rows = []
     with open(path) as fh:
@@ -46,14 +43,12 @@ def load_bed(path):
             except ValueError:
                 continue
     return pd.DataFrame(rows, columns=['chrom', 'start', 'end', 'cn'])
-
 def sample_name_from_path(path, regex=None):
     base = re.sub(r'\.bed$', '', os.path.basename(path))
     if regex:
         m = re.search(regex, base)
         if m: return m.group(1) if m.groups() else m.group(0)
     return base
-
 def bed_to_chrom_means(df, chroms=CHROM_ORDER):
     out = {}
     for chrom in chroms:
@@ -64,7 +59,6 @@ def bed_to_chrom_means(df, chroms=CHROM_ORDER):
             w = (sub['end'] - sub['start']).clip(lower=1).astype(float)
             out[chrom] = float((sub['cn'] * w).sum() / w.sum())
     return out
-
 def bed_to_fixed_bins(df, bin_size, chrom_sizes):
     cols = []
     for chrom in sorted(chrom_sizes, key=chrom_sort_key):
@@ -82,7 +76,6 @@ def bed_to_fixed_bins(df, bin_size, chrom_sizes):
             tot = ov.sum()
             cols.append((label, float((sub['cn'] * ov).sum() / tot) if tot > 0 else np.nan))
     return cols
-
 def parse_chrom_sizes(fai_path):
     sizes = {}
     with open(fai_path) as fh:
@@ -92,7 +85,6 @@ def parse_chrom_sizes(fai_path):
                 try: sizes[toks[0]] = int(toks[1])
                 except ValueError: pass
     return sizes
-
 def main():
     p = argparse.ArgumentParser(
         description='Generate a clustered CNV heatmap from per-sample BED files.',
@@ -104,6 +96,7 @@ def main():
     p.add_argument('--bin-size', type=int, default=0)
     p.add_argument('--fai',    type=str, default='')
     p.add_argument('--sample-regex', type=str, default='')
+    p.add_argument('--metadata-tsv', type=str, default='')
     p.add_argument('--cmap',   type=str, default='RdBu_r')
     p.add_argument('--vmin',   type=int, default=0)           ### CHANGED: int, not float
     p.add_argument('--vmax',   type=int, default=6)           ### CHANGED: int, not float
@@ -112,7 +105,6 @@ def main():
     p.add_argument('--show-sample-labels', type=int, default=1, # action='store_true',
                    help='Print sample names on y-axis (on by default; matches the reference figure)')
     args = p.parse_args()
-
     # ---- collect input files ------------------------------------------------
     files = []
     for pat in args.input:
@@ -120,14 +112,12 @@ def main():
     files = [f for f in files if os.path.isfile(f) and os.path.getsize(f) > 0]
     if not files:
         sys.stderr.write('No input BED files found.\n'); sys.exit(1)
-
     use_fixed_bins = (args.bin_size > 0)
     if use_fixed_bins:
         if not args.fai:
             sys.stderr.write('--bin-size requires --fai\n'); sys.exit(1)
         chrom_sizes = {c: s for c, s in parse_chrom_sizes(args.fai).items()
                        if c in CHROM_ORDER}
-
     rows = {}
     for path in files:
         name = sample_name_from_path(path, args.sample_regex or None)
@@ -139,10 +129,8 @@ def main():
                 df, args.bin_size, chrom_sizes)})
         else:
             rows[name] = pd.Series(bed_to_chrom_means(df))
-
     if not rows:
         sys.stderr.write('No data to plot.\n'); sys.exit(1)
-
     samp_names = list(rows.keys())
     common_prefix = os.path.commonprefix(samp_names)
     common_preadd = common_prefix.split('_')[-1]
@@ -150,22 +138,26 @@ def main():
     def rm_suffix(x, suffix): return (x[0:-len(suffix)] if x.endswith(suffix) else x)
     samp_name_old2new = {x: rm_suffix(x.removeprefix(common_prefix), common_suffix) for x in samp_names}
     rows = {(common_preadd + samp_name_old2new[sn]) : val for (sn, val) in rows.items()}
+    if args.metadata_tsv:
+        metadata = pd.read_csv(args.metadata_tsv, sep='\t', dtype=str).fillna('')
+        run_col = next((c for c in ['#Run', 'Run'] if c in metadata.columns), None)
+        if run_col and 'treatment' in metadata.columns:
+            treatments = dict(zip(metadata[run_col].str.strip(), metadata['treatment'].str.strip()))
+            rows = {(F'{name}_{treatments[name]}' if treatments.get(name) else name): val
+                    for name, val in rows.items()}
     mat = pd.DataFrame(rows).T
     if not use_fixed_bins:
         mat = mat[[c for c in CHROM_ORDER if c in mat.columns]]
-
     # ============== CHANGED: integer copy numbers ===========================
     mat = mat.round().clip(lower=args.vmin, upper=args.vmax)
     mat = mat.dropna(axis=1, how='all')
     fill = mat.fillna(args.center)
-
     # ============== CHANGED: discrete colormap + boundary norm ==============
     n_levels = args.vmax - args.vmin + 1
     base = plt.get_cmap(args.cmap, n_levels)
     discrete_cmap = ListedColormap([base(i) for i in range(n_levels)])
     norm = BoundaryNorm(np.arange(args.vmin - 0.5, args.vmax + 1.5, 1.0),
                         discrete_cmap.N)
-
     figsize = (max(8, min(0.09 * mat.shape[1] + 6, 12)),
                max(8, min(0.18 * mat.shape[0] + 3, 12)))
     print(f"figsize={figsize}")
@@ -179,7 +171,7 @@ def main():
         cbar_kws={'label':  'Copy numbers',
                   'ticks':  np.arange(args.vmin, args.vmax + 1),
                   'spacing': 'proportional',                 ### CHANGED: discrete colorbar
-                  'orientation': 'horizontal'},              ### CHANGED: horizontal color bar  
+                  'orientation': 'horizontal'},              ### CHANGED: horizontal color bar
                   xticklabels=False,                         ### CHANGED: hide per-bin x labels
         yticklabels=args.show_sample_labels,
         dendrogram_ratio=(0.15, 0.055),                      ### https://chat.deepseek.com/a/chat/s/e2f22ab0-ceb2-47f1-8e8a-005ef1810b65
@@ -189,7 +181,6 @@ def main():
     # This example places it below the heatmap
     g.ax_cbar.set_position([0.25, 0.98, 0.5, 0.01])
     # g.ax_cbar.set_title('Copy numbers')
-
     # Change tick length
     g.ax_cbar.tick_params(axis='x', length=3)
 
@@ -204,7 +195,6 @@ def main():
         if prev is not None and c != prev:
             ax.axvline(i, color='black', linestyle='--', linewidth=0.8)
         prev = c
-
     pos = {}
     for i, c in enumerate(col_chroms):
         pos.setdefault(c, []).append(i)
@@ -217,13 +207,11 @@ def main():
     ax.set_xticklabels(labels, rotation=15, fontsize=8)
     ax.tick_params(axis='x', length=0)
     # ========================================================================
-
     if args.show_sample_labels:
         plt.setp(ax.get_yticklabels(), rotation=0, fontsize=6)
 
     if args.title:
         g.fig.suptitle(args.title, y=1.02)
-
     out_dir = os.path.dirname(os.path.abspath(args.output_prefix))
     if out_dir: os.makedirs(out_dir, exist_ok=True)
     g.savefig(args.output_prefix + '.pdf', bbox_inches='tight')
