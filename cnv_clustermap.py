@@ -97,6 +97,8 @@ def main():
     p.add_argument('--fai',    type=str, default='')
     p.add_argument('--sample-regex', type=str, default='')
     p.add_argument('--metadata-tsv', type=str, default='')
+    p.add_argument('--float-copy-numbers', action='store_true',
+                   help='Plot continuous float copy-number intensity instead of rounded integer copy numbers')
     p.add_argument('--cmap',   type=str, default='RdBu_r')
     p.add_argument('--vmin',   type=int, default=0)           ### CHANGED: int, not float
     p.add_argument('--vmax',   type=int, default=6)           ### CHANGED: int, not float
@@ -149,7 +151,8 @@ def main():
     if not use_fixed_bins:
         mat = mat[[c for c in CHROM_ORDER if c in mat.columns]]
     # ============== CHANGED: integer copy numbers ===========================
-    mat = mat.round().clip(lower=args.vmin, upper=args.vmax)
+    if not args.float_copy_numbers: mat = mat.round()
+    mat = mat.clip(lower=args.vmin, upper=args.vmax)
     mat = mat.dropna(axis=1, how='all')
     fill = mat.fillna(args.center)
     # ============== CHANGED: discrete colormap + boundary norm ==============
@@ -158,6 +161,12 @@ def main():
     discrete_cmap = ListedColormap([base(i) for i in range(n_levels)])
     norm = BoundaryNorm(np.arange(args.vmin - 0.5, args.vmax + 1.5, 1.0),
                         discrete_cmap.N)
+    heatmap_cmap = (args.cmap if args.float_copy_numbers else discrete_cmap)
+    heatmap_norm = (None if args.float_copy_numbers else norm)
+    cbar_kws = ({'label': 'Relative copy-number intensity', 'orientation': 'horizontal'}
+                 if args.float_copy_numbers else
+                 {'label': 'Copy numbers', 'ticks': np.arange(args.vmin, args.vmax + 1),
+                  'spacing': 'proportional', 'orientation': 'horizontal'})
     figsize = (max(8, min(0.09 * mat.shape[1] + 6, 12)),
                max(8, min(0.18 * mat.shape[0] + 3, 12)))
     print(f"figsize={figsize}")
@@ -166,12 +175,12 @@ def main():
         row_cluster=True, col_cluster=False,
         method='average', metric='euclidean',
         # cmap='coolwarm',
-        cmap=discrete_cmap, norm=norm,                     ### CHANGED: norm replaces vmin/vmax/center
+        cmap=heatmap_cmap, norm=heatmap_norm,               ### CHANGED: norm replaces vmin/vmax/center
+        vmin=(args.vmin if args.float_copy_numbers else None),
+        vmax=(args.vmax if args.float_copy_numbers else None),
+        center=(args.center if args.float_copy_numbers else None),
         figsize=figsize,
-        cbar_kws={'label':  'Copy numbers',
-                  'ticks':  np.arange(args.vmin, args.vmax + 1),
-                  'spacing': 'proportional',                 ### CHANGED: discrete colorbar
-                  'orientation': 'horizontal'},              ### CHANGED: horizontal color bar
+        cbar_kws=cbar_kws,
                   xticklabels=False,                         ### CHANGED: hide per-bin x labels
         yticklabels=args.show_sample_labels,
         dendrogram_ratio=(0.15, 0.055),                      ### https://chat.deepseek.com/a/chat/s/e2f22ab0-ceb2-47f1-8e8a-005ef1810b65
