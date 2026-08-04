@@ -64,7 +64,7 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
                 )
                 cmd_dedup = (
                     F'samtools view -F 0x400 -o {tumor_dedupbam} {tumor_bam} '
-                    F'&& samtools index {tumor_dedupbam} #parallel=tumor.dedup/'
+                    F'&& samtools index {tumor_dedupbam} && samtools flagstat {tumor_dedupbam} -O json > {tumor_dedupbam}.flagstat #parallel=tumor.dedup/'
                 )
                 write2file(cmd_align + ' && ' + cmd_dedup, f1, inst_sh1)
             deps.append((inst_sh0, inst_sh1, ['resources: mem_mb = 9000']))
