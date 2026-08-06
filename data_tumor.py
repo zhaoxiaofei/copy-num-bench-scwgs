@@ -12,7 +12,6 @@ The flow per donor / sample-type / spot-length group is:
     align FASTQ -> BAM   (one BAM per tumor cell, in a persistent datdir)
     -> run each requested CNV caller on the set of BAMs
     -> aggregate per-cell CNV BEDs into a clustered heatmap (PDF + PNG) per caller.
-
 Activated when main.py is invoked with --tumor-fastq.
 """
 import argparse, logging, os
@@ -33,6 +32,28 @@ t_tumor_dedupbam = '<data1to2dir>/<donor>/2from1_2_<donor>.datdir/2_<donor>_2fro
 t_clmap_logdir = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/'
 t_clmap_script = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_tumor_clustermap.sh'
 t_clmap_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_clustermap'
+def _fqs_to_df(args, metadata_tsv):
+    samples = {}
+    for fq in args.fqs:
+        fq = os.path.abspath(fq)
+        if not os.path.isfile(fq): raise ValueError(F'FASTQ file does not exist: {fq}')
+        name = os.path.basename(fq)
+        if name.endswith('_1.fastq.gz'): acc, read = name[:-11], 'Fastq1'
+        elif name.endswith('_2.fastq.gz'): acc, read = name[:-11], 'Fastq2'
+        elif name.endswith('.fastq.gz'): acc, read = name[:-9], 'Fastq1'
+        else: raise ValueError(F'Unsupported FASTQ filename: {name}')
+        samples.setdefault(acc, {'Fastq1': '', 'Fastq2': ''})[read] = fq
+    rows = []
+    for acc, fqs in samples.items():
+        if not fqs['Fastq1']: raise ValueError(F'Missing read 1 for {acc}')
+        rows.append({'#Run': acc, 'AvgSpotLen': args.avgSpotLen,
+            'Library~Name': acc, 'Sample~Name': acc, 'sample-type': args.sampleType,
+            'Donor': args.donor, 'Platform': 'ILLUMINA',
+            'LibraryLayout': 'PAIRED' if fqs['Fastq2'] else 'SINGLE', **fqs})
+    df0 = pd.DataFrame(rows)
+    os.makedirs(os.path.dirname(metadata_tsv), exist_ok=True)
+    df0.to_csv(metadata_tsv, sep='\t', index=False)
+    return df0
 def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
     """Generate align-only rules (no germline VCF, no haplotype splitting).
     Returns (snakemake-deps list, donor_to_bam_dict) where donor_to_bam_dict maps
@@ -48,11 +69,12 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         with cm.myopen(inst_sh0, args.writing_mode) as f0:
             write2file(F'echo {inst_sh0} is started', f0, inst_sh0)
         donor_bams = []
-        for acc, LB, SM, platform, LL in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name'], df1['Platform'], df1['LibraryLayout']):
+        for acc, LB, SM, platform, LL, fq1, fq2 in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name'], df1['Platform'], df1['LibraryLayout'], df1['Fastq1'], df1['Fastq2']):
             infodict_acc = dict(infodict, accession=str(acc))
             inst_sh1, inst_fq1, inst_fq2, tumor_bam, tumor_dedupbam = find_replace_all(
                 [cm.t1into2sh1, cm.t0into1fq1, cm.t0into1fq2, t_tumor_bam, t_tumor_dedupbam],
                 infodict_acc)
+            if fq1: inst_fq1, inst_fq2 = fq1, fq2
             if LL == 'SINGLE': inst_fq2 = ''
             else: assert LL == 'PAIRED'
             with cm.myopen(inst_sh1, args.writing_mode) as f1:
@@ -76,7 +98,6 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         deps.append((inst_end, F'data2from1_all.rule'))
         donor_to_bams[str(donor)] = donor_bams
     return deps, donor_to_bams
-
 def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts, phased_vcf, ref):
     """For each (avgSpotLen, sample-type, donor) group and each requested CNV tool,
     generate the run-tool snakemake rules (delegated to data4from2and3.run_tool_1) and a
@@ -159,19 +180,14 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_tool_{tool}.rule'))
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_all.rule'))
     return deps
-
 def main(args1=None):
     """Entry point used by main.py when --tumor-fastq is set."""
     logging.basicConfig(level=logging.INFO,
         format='%(asctime)s %(pathname)s:%(lineno)d %(levelname)s - %(message)s')
     script_dir = os.path.dirname(os.path.abspath(__file__))
     datadir = os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data']))
-    data0to1dir, data1to2dir, data2to3dir, data2to4dir, data3to4dir, data4to5dir = cm.get_varnames(datadir)
-    root = os.path.abspath(F'{script_dir}/../')
-    root = os.getenv('cnvguiderRoot', root)
-    ref = F'{root}/refs/hg19.fa'
-    ref = os.getenv('cnvguiderRef', ref)
     phased_vcf = f'{datadir}/HG008-N-P.phased.hg19.pos.tsv'
+
     if args1 is None:
         # Standalone use: minimal argparse stub. main.py normally fills args1 in.
         parser = argparse.ArgumentParser(description='Tumor-mode pipeline (alignment + CNV calling + clustermap)',
@@ -182,13 +198,27 @@ def main(args1=None):
         parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE)
         parser.add_argument('--tumor-fastq', action='store_true')
         parser.add_argument('--phased-vcf', default=phased_vcf)
+        parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
         args = parser.parse_args()
     else:
         args = args1
         if not hasattr(args, 'phased_vcf') or not args.phased_vcf:
             logging.info(f"Setting phased_vcf={phased_vcf} by default.")
             args.phased_vcf = phased_vcf
-    df0 = pd.read_csv(args.SraRunTable, sep='\t', header=0)
+
+    # datadir = args.tumor_datdir # os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data']))
+    data0to1dir, data1to2dir, data2to3dir, data2to4dir, data3to4dir, data4to5dir = cm.get_varnames(args.tumor_datdir)
+    _data0to1di, data1to2dir, data2to3dir, data2to4dir, data3to4dir, data4to5dir = cm.get_varnames(datadir)
+
+    root = os.path.abspath(F'{script_dir}/../')
+    root = os.getenv('cnvguiderRoot', root)
+    ref = F'{root}/refs/hg19.fa'
+    ref = os.getenv('cnvguiderRef', ref)
+ 
+    if getattr(args, 'fqs', None):
+        args.SraRunTable = os.path.join(datadir, 'fqs.metadata.tsv')
+        df0 = _fqs_to_df(args, args.SraRunTable)
+    else: df0 = pd.read_csv(args.SraRunTable, sep='\t', header=0)
     df0.columns = df0.columns.str.replace(' ', '~')
     df0 = df0.astype(str).apply(lambda x: x.str.replace(' ', '-'))
     if '#Run' not in df0.columns: df0['#Run'] = df0['Run']
@@ -201,13 +231,16 @@ def main(args1=None):
     if 'Donor' not in df0.columns:
         if 'tissue' in df0.columns: df0['Donor'] = df0['tissue'].str.replace(' ', '-')
         else: df0['Donor'] = df0['isolate'].str.replace(' ', '-')
+    df0['Donor'] = df0['SRA~Study'].str.cat(df0['Donor'], sep='_')
+
+    if 'Fastq1' not in df0.columns: df0['Fastq1'] = ''
+    if 'Fastq2' not in df0.columns: df0['Fastq2'] = ''
     deps_align, donor_to_bams = _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir)
     visited_scripts = set()
     print(f"#Going over df_with_shape={df0.shape}")
     deps_calls = _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams, visited_scripts, args.phased_vcf, ref)
     print(f"#num_deps_align={len(deps_align)} num_deps_calls={len(deps_calls)}")
     return deps_align + deps_calls
-
 
 if __name__ == '__main__':
     print(cm.list2snakemake(main()))

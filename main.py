@@ -22,6 +22,12 @@ def main():
     parser.add_argument('--tumor-fastq', action='store_true', help=(
         'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of near-haploid germline samples). '
         'When set, only alignment + CNV calling + clustermap are run; the haplotype-mixing simulation is skipped.'))
+    parser.add_argument('--fqs', nargs='+', default=None)
+    parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
+
+    parser.add_argument('--donor', default='tumor')
+    parser.add_argument('--sampleType', default='tumor')
+    parser.add_argument('--avgSpotLen', type=int, default=0)
     parser.add_argument('--phased-vcf', default=None, help='Phased VCF file required by haplotype-aware CNV callers such as Chisel.')
     parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE,
         help=F'File open mode for writing commands to shell script, pass any of {cm.OVERWRITING_PREVENTION_MODES} to prevent overwriting existing scripts (or w to do not prevent such thing). ')
@@ -37,6 +43,7 @@ def main():
     parser.add_argument('--steps', nargs='+', default=EVAL_STEPS, choices=EVAL_STEPS, help='Main steps')
 
     args = parser.parse_args()
+    if args.fqs: args.tumor_fastq = True
     try: args.tools = gink_custom_binning.setup(data4from2and3, args.tools, args.binnings)
     except ValueError as exc: parser.error(str(exc))
 
