@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import argparse, io, json, logging, os, random, sys
+import argparse, io, json, logging, os, random, re, sys
 import pandas as pd
 
 from collections.abc import Iterable
@@ -114,7 +114,18 @@ def norm_tool_result(call, result_filename_1, tool, lib_1, pyscripts, result_fil
     
     return [cmd1] + [cmd2], [depcns, intcns]
 
-def bamfilename2samplename(bam): return bam.split(os.path.sep)[-1].split('.')[0]
+# The sample name is the basename of the BAM file without its trailing extension. The basename
+# is deliberately not split on its first period, because a sample name may contain the period
+# ('.') symbol: splitting on the first period would merge all cells of, for example, the donor
+# named COLO.829 into the single sample name 2_COLO.
+def bamfilename2samplename(bam): return os.path.splitext(os.path.basename(bam))[0]
+
+# R rewrites every column name with make.names() when reading a table (which Ginkgo's process.R
+# and CopyNumber.R both do): each character other than a letter, a digit, a period and an
+# underscore (in particular the dash) becomes a period, and a name not starting with a letter is
+# prefixed with 'X'. The prefix is harmless for the substring search done by cnv_raw_to_bed.py,
+# but the character substitution has to be replayed here to find the sample in such a table.
+def samplename2rname(lib): return re.sub(r'[^A-Za-z0-9._]', '.', lib)
 
 def get_cleanup(script): return change_file_ext(script, 'cleanup.sh')
 
@@ -234,13 +245,23 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]
     if tool == 'ginkgo':
+        # Ginkgo names each cell after the path that it reads from its cells list, so listing the
+        # cells by their absolute paths made every column of SegCopy/SegFixed/SegNorm/SegBreaks (and
+        # every per-cell JPEG and .cnv file) be named after the whole path, mangled by R make.names()
+        # into something like
+        #   X.stor.zxf.cnv.real_tumor_data.GIAB.HG008.<...>.tmpdir..2_GIAB.HG008_2from1_tumor_SRR30713454_sort_markdup
+        # Hence the cells are now listed by their basenames, from inside the input directory (a
+        # subshell keeps that directory change local to this command), which makes Ginkgo name each
+        # cell after the basename of its BED file. Note that Ginkgo strips the extension of a cell
+        # with awk -F ".bed", which keeps any period inside the name of the cell itself.
         cmd = (
-            F'rm {tmpdir}/*.bed || true && cp -s {" ".join(beds)} {tmpdir}/ && ls {tmpdir}/*.bed > {tmpdir}/cells.list'
-            F'&& time -p bash -evx {ginkgo_sh} --input {tmpdir} --genome hg19 --binning variable_175000_48_bwa --cells {tmpdir}/cells.list #sequential=run.{tool}/'
+            F'rm {tmpdir}/*.bed || true && cp -s {" ".join(beds)} {tmpdir}/ '
+            F'&& (cd {tmpdir} && ls *.bed > cells.list '
+            F'&& time -p bash -evx {ginkgo_sh} --input {tmpdir} --genome hg19 --binning variable_175000_48_bwa --cells {tmpdir}/cells.list) #sequential=run.{tool}/'
         )
         cmds.append(cmd)
         for bam, lib, cnv in zip(bams, libs, cnvs):
-            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/SegFixed', tool, lib, tobed, result_filename_2=F'{tmpdir}/SegCopy', lib_from_tool=lib.replace('-', '.'))
+            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/SegFixed', tool, lib, tobed, result_filename_2=F'{tmpdir}/SegCopy', lib_from_tool=samplename2rname(lib))
             cmds2.extend(norm_cmds)
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]
@@ -256,7 +277,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
         cmd += F' && time -p python {collect_rc_4copynumber_py} {tmpdir} && time -p Rscript {CopyNumber_R} {tmpdir}/copynumber.input.csv {tmpdir}/copynumber.output {gamma} #sequential=run.{tool}/'
         cmds.append(cmd)
         for lib, cnv, bam in zip(libs, cnvs, bams):        
-            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/copynumber.output.csv', tool, lib, tobed, lib_from_tool=lib.replace('-', '.'))
+            norm_cmds, norm_beds = norm_tool_result(inbam2call[bam], F'{tmpdir}/copynumber.output.csv', tool, lib, tobed, lib_from_tool=samplename2rname(lib))
             cmds2.extend(norm_cmds)
             bam2bed[bam] = norm_beds[1]
             lib2bed[lib] = norm_beds[1]    
@@ -557,4 +578,3 @@ def main(args1=None):
                 ret.extend(deps)
     return ret
 if __name__ == '__main__': print(cm.list2snakemake(main()))
-
