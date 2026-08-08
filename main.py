@@ -23,6 +23,15 @@ def main():
         'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of near-haploid germline samples). '
         'When set, only alignment + CNV calling + clustermap are run; the haplotype-mixing simulation is skipped.'))
     parser.add_argument('--fqs', nargs='+', default=None)
+    parser.add_argument('--fastq-layout', choices=cm.FASTQ_LAYOUTS, default=cm.FASTQ_LAYOUT_DEFAULT, help=(
+        'How tumor-mode input FASTQs under 1from0.datdir/ are located. '
+        '"flat" (default) is the historical <accession>_1.fastq.gz with no filesystem lookup. '
+        '"auto" searches with cm.fastq_pair: the sharded path if that file exists, else the '
+        'flat path if that exists, else flat. "sharded" always uses the shard sub-path.'))
+    parser.add_argument('--fastq-shard-template', default=cm.FASTQ_SHARD_TEMPLATE,
+        help='Shard sub-path built from <study>, <accprefix> and <accession>')
+    parser.add_argument('--fastq-shard-prefix-len', type=int, default=cm.FASTQ_SHARD_PREFIX_LEN,
+        help='Number of leading accession characters forming <accprefix>')
     parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
 
     parser.add_argument('--donor', default='tumor')

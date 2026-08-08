@@ -6,6 +6,56 @@ import collections, logging, os, re, subprocess
 t0into1fq1 = '<data0to1dir>/1from0.datdir/<accession>_1.fastq.gz'
 t0into1fq2 = '<data0to1dir>/1from0.datdir/<accession>_2.fastq.gz'
 
+# data1, sharded. Only the files under 1from0.datdir move; every other path template in
+# this file is unchanged. A flat 1from0.datdir does not survive 10x-scale tumor data
+# (thousands of cells per BAM x several BAMs = 10^4..10^5 entries in one directory), so
+# tumor-mode FASTQs may instead live under a shard sub-path:
+#   1from0.datdir/SRP114962/SRR633/SRR6337882_1.fastq.gz
+#   1from0.datdir/PRJNA498809/colo82/colo829_10x_G1_1k_AACGTGATCCTTGCAA-1_1.fastq.gz
+# t0into1fq1/t0into1fq2 above are untouched, so every existing caller keeps its behaviour.
+FASTQ_SHARD_TEMPLATE   = '<study>/<accprefix>'
+FASTQ_SHARD_PREFIX_LEN = 6
+# 'flat' is first, and is the default everywhere: without an explicit --fastq-layout the
+# resolver below is never called, so no os.path.exists probing happens at all.
+FASTQ_LAYOUTS = ['flat', 'auto', 'sharded']
+FASTQ_LAYOUT_DEFAULT = FASTQ_LAYOUTS[0]
+t0into1fq1_sharded = '<data0to1dir>/1from0.datdir/<shard>/<accession>_1.fastq.gz'
+t0into1fq2_sharded = '<data0to1dir>/1from0.datdir/<shard>/<accession>_2.fastq.gz'
+
+def sanitize_path_part(part, default='NA'):
+    cleaned = re.sub(r'[^A-Za-z0-9._+-]', '-', str(part if part is not None else '').strip())
+    return cleaned if cleaned and cleaned.lower() != 'nan' else default
+
+def fastq_shard(accession, study=None, template=None, prefix_len=None):
+    """Render the shard sub-path (no leading/trailing separator) for one accession."""
+    template   = (template   if template   else FASTQ_SHARD_TEMPLATE)
+    prefix_len = (prefix_len if prefix_len else FASTQ_SHARD_PREFIX_LEN)
+    acc = sanitize_path_part(accession)
+    rendered = template
+    for key, val in (('study', sanitize_path_part(study)), ('accprefix', acc[:prefix_len] or acc),
+                     ('accession', acc)):
+        rendered = rendered.replace('<' + key + '>', val)
+    return os.path.sep.join([p for p in rendered.replace('\\', '/').split('/') if p])
+
+def fastq_pair(data0to1dir, accession, study=None, layout='auto', template=None, prefix_len=None):
+    """Resolve (read1, read2) for one accession.
+
+    layout='auto' (the default) prefers the sharded path when that file is already on
+    disk, then the flat path when that one is, and otherwise falls back to flat. So a
+    tree populated the old way yields exactly the strings t0into1fq1/t0into1fq2 would
+    have yielded, and a tree holding both old and new files resolves per accession.
+    """
+    infodict = {'data0to1dir': data0to1dir, 'accession': str(accession),
+                'shard': fastq_shard(accession, study, template, prefix_len)}
+    sharded = find_replace_all([t0into1fq1_sharded, t0into1fq2_sharded], infodict)
+    flat    = find_replace_all([t0into1fq1,         t0into1fq2        ], infodict)
+    if layout == 'sharded': return sharded
+    if layout == 'flat':    return flat
+    assert layout == 'auto', F'Unknown FASTQ layout {layout}; expected one of {FASTQ_LAYOUTS}'
+    if os.path.exists(sharded[0]): return sharded
+    if os.path.exists(flat[0]):    return flat
+    return flat
+
 # data1to2
 t1into2log = '<data1to2dir>/<donor>/1into2_2_<donor>.logdir/'
 t1into2sh0 = '<data1to2dir>/<donor>/1into2_2_<donor>.logdir/2_<donor>_1into2_a.sentinel_begin.sh'

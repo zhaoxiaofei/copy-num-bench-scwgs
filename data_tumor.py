@@ -69,12 +69,26 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         with cm.myopen(inst_sh0, args.writing_mode) as f0:
             write2file(F'echo {inst_sh0} is started', f0, inst_sh0)
         donor_bams = []
+        # --fastq-layout defaults to 'flat'; only a non-flat value turns on the
+        # cm.fastq_pair() search (which stats the filesystem via os.path.exists).
+        fastq_layout = getattr(args, 'fastq_layout', cm.FASTQ_LAYOUT_DEFAULT)
+        shard_study  = (df1['SRA~Study'].iloc[0] if 'SRA~Study' in df1.columns else None)
+        shard_tpl    = getattr(args, 'fastq_shard_template', None)
+        shard_len    = getattr(args, 'fastq_shard_prefix_len', None)
         for acc, LB, SM, platform, LL, fq1, fq2 in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name'], df1['Platform'], df1['LibraryLayout'], df1['Fastq1'], df1['Fastq2']):
             infodict_acc = dict(infodict, accession=str(acc))
             inst_sh1, inst_fq1, inst_fq2, tumor_bam, tumor_dedupbam = find_replace_all(
                 [cm.t1into2sh1, cm.t0into1fq1, cm.t0into1fq2, t_tumor_bam, t_tumor_dedupbam],
                 infodict_acc)
+            # Only the 1from0.datdir inputs may be sharded; inst_sh1/tumor_bam/tumor_dedupbam
+            # always keep the paths find_replace_all just produced.
+            if fastq_layout != 'flat':
+                inst_fq1, inst_fq2 = cm.fastq_pair(
+                    data0to1dir, acc, shard_study, fastq_layout, shard_tpl, shard_len)
             if fq1: inst_fq1, inst_fq2 = fq1, fq2
+            if fastq_layout != 'flat' and not os.path.exists(inst_fq1):
+                # Fail loudly here rather than after the scheduler dispatches N/1000 jobs.
+                logging.warning('read 1 not found for %s: %s', acc, inst_fq1)
             if LL == 'SINGLE': inst_fq2 = ''
             else: assert LL == 'PAIRED'
             with cm.myopen(inst_sh1, args.writing_mode) as f1:
@@ -197,6 +211,9 @@ def main(args1=None):
         parser.add_argument('--tools', nargs='+', default=SC_CN_TOOLS, choices=SC_CN_TOOLS)
         parser.add_argument('-w', '--writing-mode', type=str, default=cm.DEFAULT_WRITING_MODE)
         parser.add_argument('--tumor-fastq', action='store_true')
+        parser.add_argument('--fastq-layout', choices=cm.FASTQ_LAYOUTS, default=cm.FASTQ_LAYOUT_DEFAULT)
+        parser.add_argument('--fastq-shard-template', default=cm.FASTQ_SHARD_TEMPLATE)
+        parser.add_argument('--fastq-shard-prefix-len', type=int, default=cm.FASTQ_SHARD_PREFIX_LEN)
         parser.add_argument('--phased-vcf', default=phased_vcf)
         parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
         args = parser.parse_args()
