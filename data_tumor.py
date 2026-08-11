@@ -75,6 +75,7 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
         shard_study  = (df1['SRA~Study'].iloc[0] if 'SRA~Study' in df1.columns else None)
         shard_tpl    = getattr(args, 'fastq_shard_template', None)
         shard_len    = getattr(args, 'fastq_shard_prefix_len', None)
+        infer_LL     = getattr(args, 'infer_library_layout', False)
         for acc, LB, SM, platform, LL, fq1, fq2 in zip(df1['#Run'], df1['Library~Name'], df1['Sample~Name'], df1['Platform'], df1['LibraryLayout'], df1['Fastq1'], df1['Fastq2']):
             infodict_acc = dict(infodict, accession=str(acc))
             inst_sh1, inst_fq1, inst_fq2, tumor_bam, tumor_dedupbam = find_replace_all(
@@ -89,6 +90,13 @@ def _gen_alignment_rules(args, root, ref, df0, data0to1dir, data1to2dir):
             if fastq_layout != 'flat' and not os.path.exists(inst_fq1):
                 # Fail loudly here rather than after the scheduler dispatches N/1000 jobs.
                 logging.warning('read 1 not found for %s: %s', acc, inst_fq1)
+            # Plenty of SRA/ENA runs are annotated PAIRED but only single-end reads were
+            # ever submitted, so <accession>_2.fastq.gz never materialises and bwa dies.
+            # Opt in with --infer-library-layout to trust the files over the annotation.
+            if infer_LL and LL != 'SINGLE' and not cm.fastq_has_reads(inst_fq2):
+                logging.warning('%s is annotated %s but %s has no reads; aligning as SINGLE',
+                                acc, LL, inst_fq2)
+                LL = 'SINGLE'
             if LL == 'SINGLE': inst_fq2 = ''
             else: assert LL == 'PAIRED'
             with cm.myopen(inst_sh1, args.writing_mode) as f1:
@@ -214,6 +222,7 @@ def main(args1=None):
         parser.add_argument('--fastq-layout', choices=cm.FASTQ_LAYOUTS, default=cm.FASTQ_LAYOUT_DEFAULT)
         parser.add_argument('--fastq-shard-template', default=cm.FASTQ_SHARD_TEMPLATE)
         parser.add_argument('--fastq-shard-prefix-len', type=int, default=cm.FASTQ_SHARD_PREFIX_LEN)
+        parser.add_argument('--infer-library-layout', action='store_true')
         parser.add_argument('--phased-vcf', default=phased_vcf)
         parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
         args = parser.parse_args()

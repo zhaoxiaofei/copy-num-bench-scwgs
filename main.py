@@ -32,6 +32,11 @@ def main():
         help='Shard sub-path built from <study>, <accprefix> and <accession>')
     parser.add_argument('--fastq-shard-prefix-len', type=int, default=cm.FASTQ_SHARD_PREFIX_LEN,
         help='Number of leading accession characters forming <accprefix>')
+    parser.add_argument('--infer-library-layout', action='store_true', help=(
+        'Trust the FASTQ files on disk over the LibraryLayout column. Many SRA/ENA runs are '
+        'annotated PAIRED although only single-end reads were submitted, which otherwise '
+        'fails with a missing <accession>_2.fastq.gz. When set, any run whose read 2 is '
+        'absent or holds no reads is aligned as SINGLE. Off by default: it stats each read 2.'))
     parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
 
     parser.add_argument('--donor', default='tumor')

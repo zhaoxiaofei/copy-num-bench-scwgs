@@ -1,4 +1,4 @@
-import collections, logging, os, re, subprocess
+import collections, gzip, logging, os, re, subprocess
 
 ### data-related variables and methods
 
@@ -21,6 +21,25 @@ FASTQ_LAYOUTS = ['flat', 'auto', 'sharded']
 FASTQ_LAYOUT_DEFAULT = FASTQ_LAYOUTS[0]
 t0into1fq1_sharded = '<data0to1dir>/1from0.datdir/<shard>/<accession>_1.fastq.gz'
 t0into1fq2_sharded = '<data0to1dir>/1from0.datdir/<shard>/<accession>_2.fastq.gz'
+
+# A gzip stream containing nothing is 20 bytes, and bgzip's EOF block is 28, while a
+# genuine one-read FASTQ gzips to about 33 -- far too narrow a gap to judge by size. So
+# only files below this bound are actually decompressed; anything larger plainly has
+# content. Used to catch runs annotated PAIRED whose read 2 is absent or is a zero-read
+# placeholder.
+AMBIGUOUS_FASTQ_GZ_BYTES = 1024
+
+def fastq_has_reads(path, ambiguous_bytes=AMBIGUOUS_FASTQ_GZ_BYTES):
+    """True when path exists and yields at least one byte of FASTQ."""
+    try: size = (os.path.getsize(path) if path else 0)
+    except OSError: return False           # missing, or not a file we can stat
+    if size <= 0: return False
+    if size > ambiguous_bytes: return True # too large to be an empty stream
+    if not str(path).endswith(('.gz', '.gzip')): return True
+    try:
+        with gzip.open(path, 'rb') as fh: return bool(fh.read(1))
+    # BadGzipFile subclasses OSError, but a truncated stream raises EOFError instead.
+    except (OSError, EOFError): return False
 
 def sanitize_path_part(part, default='NA'):
     cleaned = re.sub(r'[^A-Za-z0-9._+-]', '-', str(part if part is not None else '').strip())
