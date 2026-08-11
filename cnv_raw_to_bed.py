@@ -2,6 +2,8 @@ import argparse
 import logging
 import sys
 
+import data4from2and3
+
 logging.basicConfig(level=logging.DEBUG)
 
 def myint(n): return int(round(float(n)))
@@ -44,8 +46,10 @@ def main():
             tokens = line.strip().split()
             if tokens[0] == 'CHR':
                 for index, token in enumerate(tokens):
-                    if args.sample in token: sample_col_index = index
-                assert sample_col_index > 2, F'The sample keyword {args.sample} is not found!'
+                    test_token = data4from2and3.samplename2rname(token)
+                    test_sample = data4from2and3.samplename2rname(args.sample)
+                    if test_sample in test_token: sample_col_index = index
+                assert sample_col_index > 2, F'The sample keyword {args.sample} is not found!\nSet={tokens}'
                 continue
             chrom = tokens[0]
             start = myint(tokens[1])
