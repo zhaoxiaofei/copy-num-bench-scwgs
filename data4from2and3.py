@@ -175,6 +175,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
         deps.append((start_script, script))
         cmds.append(F'echo performed no-operation')
         for tool_next in SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT[tool]:
+            if tool_next not in tool2script_dict: continue  # excluded tool
             script_next = tool2script_dict[tool_next]
             # These mem_mb's are empirically measured with "command time -v"
             if tool_next == 'scyn':
@@ -226,6 +227,7 @@ def run_tool_1(infodict, tool, inbam2call, tmpdir, script, script2, script_eval,
 
         cmds.append(F'echo performed {tool}')
         for tool_next in SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT[tool]:
+            if tool_next not in tool2script_dict: continue  # excluded tool
             script_next = tool2script_dict[tool_next]
             deps.append((script, script_next))
             for subscript in subscripts:

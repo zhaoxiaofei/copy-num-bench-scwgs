@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# https://claude.ai/chat/1154badf-2241-4cce-9e52-7c5565f9abe3
+
 """
 Compare the observed per-cell ploidy (inferred by a benchmarked scWGS CNV caller) against the
 expected per-cell ploidy (an orthogonal experimental estimate, e.g. FACS/DAPI or karyotype)
@@ -38,6 +40,13 @@ Definitions taken from that paper
   halving), and separating them from unstructured error is what makes the outlier rate
   interpretable.  Reported as `pct_near_2x`, `pct_near_half`, `pct_scaling_error`.
 
+* Copy-number cap (`--max-cn`).  A ploidy is a genome-wide mean, so a few focal high-level
+  amplifications can move it by more than the whole evaluation window.  Capping each segment
+  at `--max-cn` (default 10) keeps such segments counted but bounded; `--max-cn inf` averages
+  the copy numbers exactly as the caller reported them.  The two settings answer different
+  questions -- how well the caller places the bulk of the genome, versus what its raw output
+  literally implies -- so the pipeline runs both and writes them to separate output prefixes.
+
 Usage
 -----
     python ploidy_eval.py \
@@ -68,6 +77,31 @@ ALL_CHROMS = AUTOSOMES + SEX_CHROMS
 
 # scAbsolute's window around the experimental point estimate (their Table 1 / Fig. 4).
 DEFAULT_PLOIDY_WINDOW = 0.5
+
+# Cap applied to the per-segment copy number before it is averaged into a ploidy. Ploidy is a
+# genome-wide mean, so without a cap a few focal high-level amplifications (which some callers
+# report as CN in the hundreds) move it by more than the whole +/- 0.5 window; with a cap the
+# amplified segments still count, only not unboundedly. `inf` disables the cap, which is the
+# right setting when the question is what the caller literally reported.
+DEFAULT_MAX_CN = 10.0
+UNCAPPED_MAX_CN_ALIASES = ('inf', 'infinity', 'none', 'no', 'nan', '')
+
+
+def is_uncapped(max_cn):
+    """True when `max_cn` asks for the copy numbers to be averaged exactly as they were called."""
+    return max_cn is None or not np.isfinite(float(max_cn))
+
+
+def parse_max_cn(value):
+    """--max-cn: a number, or any of `inf`/`none` to leave the copy numbers uncapped."""
+    if value is None:
+        return float('inf')
+    if str(value).strip().lower() in UNCAPPED_MAX_CN_ALIASES:
+        return float('inf')
+    max_cn = float(value)                    # raises ValueError, which argparse turns into a message
+    if not (max_cn > 0):
+        raise ValueError(F'--max-cn {value} must be positive')
+    return max_cn
 
 # Columns of an SraRunTable that may carry a human-readable sample label, most specific first.
 # `TN2_S6_C359`-style library names collapse to `TN2` through the prefix backoff in
@@ -256,6 +290,9 @@ def bed_to_ploidy(path_or_df, chroms=None, weight='length', max_cn=10):
     `chroms` restricts the calculation (default: autosomes -- sex-chromosome calls are the
     least reliable output of every caller and scAbsolute likewise excludes them when reasoning
     about the diploid baseline).
+    `max_cn` caps the per-segment copy number before averaging, so that a handful of focal
+    high-level amplifications cannot dominate a mean that is meant to describe the whole
+    genome; pass None or a non-finite value to average the copy numbers as they were called.
     """
     df = load_bed(path_or_df) if isinstance(path_or_df, str) else path_or_df.copy()
     if df.empty:
@@ -274,7 +311,7 @@ def bed_to_ploidy(path_or_df, chroms=None, weight='length', max_cn=10):
     total = float(w.sum())
     if total <= 0:
         return float('nan'), 0, int(len(df))
-    cn_series = df['cn'].clip(upper=max_cn)
+    cn_series = df['cn'] if is_uncapped(max_cn) else df['cn'].clip(upper=float(max_cn))
     return float((cn_series * w).sum() / total), int(lengths.sum()), int(len(df))
 
 
@@ -491,7 +528,9 @@ def build_parser():
                    help='Drop cells whose called segments cover fewer bases than this')
     p.add_argument('--strict', action='store_true',
                    help='Exit non-zero if any cell cannot be resolved to a ploidy-file sample')
-    p.add_argument('--max-cn', default=10, help='Maximum copy numbers')
+    p.add_argument('--max-cn', type=parse_max_cn, default=DEFAULT_MAX_CN, help=(
+                   'Cap applied to each segment copy number before averaging; pass inf (or none) '
+                   'to average the copy numbers exactly as the caller reported them'))
     p.add_argument('--plot', action='store_true', help='Also write a scAbsolute Fig. 4 style plot')
     p.add_argument('--title', default='')
     # Free-form provenance columns, filled in by data_tumor.py so that per-tool result files
@@ -560,6 +599,9 @@ def main(argv=None):
     overall.update({'n_cells_unresolved': len(unresolved), 'n_bed_files': len(files),
                     'ploidy_file': os.path.abspath(args.ploidy_file),
                     'chroms': args.chroms, 'weight': args.weight,
+                    # A string when uncapped, so that the file stays valid JSON for readers
+                    # that reject the Infinity literal.
+                    'max_cn': ('inf' if is_uncapped(args.max_cn) else float(args.max_cn)),
                     'tool': args.tool, 'donor': args.donor,
                     'sampleType': args.sample_type, 'avgSpotLen': args.avg_spot_len})
 

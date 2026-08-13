@@ -27,6 +27,32 @@ python cnv_gather_results.py -i ../data/*/4from3_*.datdir/*.perf.json -o ${BENCH
 cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/scWGS-performances-eval.py -t 0 -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots
 ```
 
+### How to benchmark ploidy-inference tools (optional)
+
+Tools such as [scAbsolute](https://doi.org/10.1186/s13059-024-03204-y) report a ploidy estimate instead of a per-cell copy-number profile, so they are benchmarked by an opt-in module of their own (`ploidy_tools.py`) rather than by the CNV-caller pipeline above.
+Nothing changes unless `--ploidy-tools` is passed: without it, `main.py` generates exactly the same Snakefile as before, rule for rule.
+
+```
+pushd data3to4code && bash -evx install_scabsolute.sh && popd
+python main.py --tumor-fastq --SraRunTable ${TUMOR_RUN_TABLE} \
+    --ploidy-file ploidy.PRJNA629885.tsv --ploidy-tools scabsolute [--ploidy-facs] > Snakefile
+snakemake --cores ${NUM_CPUS}
+```
+
+Each ploidy tool writes its per-cell estimates to a ploidy-calls TSV (columns `cell` and `ploidy`, plus any tool-specific extras) and is then scored against the experimental (FACS/DAPI) ploidy of `--ploidy-file` with the same scAbsolute metrics that `ploidy_eval.py` applies to the CNV callers: the percentage of cells outside the `--ploidy-window` around the experimental estimate, the mean absolute ploidy distance, and the 2x/0.5x scaling-error diagnostics.
+The resulting `*_ploidy_tool_eval_percell.tsv`, `_persample.tsv` and `_summary.json` share the columns of the caller-side `*_ploidy_eval_*` files and can simply be concatenated, so tools that infer ploidy and callers that imply it end up in one ranking.
+The per-sample table additionally carries `sample_ploidy` and its error columns: the single per-sample point estimate, derived from the per-cell values the way scAbsolute's own `scripts/estimatePloidy.R` derives it.
+
+`--ploidy-facs` also measures what the estimate is worth downstream: the calls are converted into a Ginkgo FACS file and Ginkgo is re-run with them as `ginkgo_facs_<tool>`, which is evaluated like any other caller and is therefore directly comparable with the untouched `ginkgo` run.
+
+Both steps also run standalone, on any ploidy-calls TSV:
+
+```
+python ploidy_tools.py eval -i '*_ploidy_calls.tsv' -o ${OUT_PREFIX} \
+    --ploidy-file ploidy.PRJNA629885.tsv --metadata-tsv ${TUMOR_RUN_TABLE} --plot
+python ploidy_tools.py facs -i '*_ploidy_calls.tsv' -o ${FACS_FILE}
+```
+
 ### Detail about the data
 
 for a set of cells derived from the same donor (e.g., human subject):

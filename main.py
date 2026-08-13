@@ -3,6 +3,7 @@ import argparse, os
 import common as cm
 import data2from1, data3from2, data4from2and3, data_tumor
 import gink_custom_binning
+import ploidy_tools
 
 from data2from1 import NUM_CPUS
 from data3from2 import cosmic_cell_lines, DOWNSAMPLE_METHODS
@@ -44,6 +45,9 @@ def main():
         help=data_tumor.PLOIDY_WINDOW_HELP)
     parser.add_argument('--ploidy-chroms', choices=['autosomes', 'all'], default='autosomes',
         help=data_tumor.PLOIDY_CHROMS_HELP)
+    parser.add_argument('--ploidy-tools', nargs='*', default=[], choices=ploidy_tools.TOOLS,
+        help=ploidy_tools.PLOIDY_TOOLS_HELP)
+    parser.add_argument('--ploidy-facs', action='store_true', help=ploidy_tools.PLOIDY_FACS_HELP)
 
     parser.add_argument('--donor', default='tumor')
     parser.add_argument('--sampleType', default='tumor')
@@ -59,12 +63,26 @@ def main():
     parser.add_argument('--downsample-method', choices=DOWNSAMPLE_METHODS, default=DOWNSAMPLE_METHODS[0], help='Downsampling method') # This should not be changed
     # 4from2and3
     parser.add_argument('--tools', nargs='+', default=SC_CN_TOOLS, choices=SC_CN_TOOLS + [gink_custom_binning.TOOL], help='Software tools calling cell-specific copy numbers from from single-cell DNA-seq data')
+    parser.add_argument('--excluded-tools', nargs='+', default=[], choices=SC_CN_TOOLS,
+        help='Tools from SC_CN_TOOLS to exclude, together with any tools that depend on them')
     parser.add_argument('--binnings', nargs='+', default=[], help='Additional Ginkgo binning options')
     parser.add_argument('--steps', nargs='+', default=EVAL_STEPS, choices=EVAL_STEPS, help='Main steps')
 
     args = parser.parse_args()
     if args.fqs: args.tumor_fastq = True
+    # Drop --excluded-tools plus every tool that (transitively) depends on them.
+    excluded = set(args.excluded_tools)
+    while True:
+        dependents = {dependent for dep, dependents in data4from2and3.SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT.items()
+                      if dep in excluded for dependent in dependents}
+        if dependents <= excluded: break
+        excluded |= dependents
+    args.tools = [tool for tool in args.tools if tool not in excluded]
     try: args.tools = gink_custom_binning.setup(data4from2and3, args.tools, args.binnings)
+    except ValueError as exc: parser.error(str(exc))
+    # Opt-in: without --ploidy-tools this returns args.tools as it is and leaves both
+    # data4from2and3 and the generated workflow completely unchanged.
+    try: args.tools = ploidy_tools.setup(data4from2and3, args.tools, args.ploidy_tools, args)
     except ValueError as exc: parser.error(str(exc))
 
     ret = []

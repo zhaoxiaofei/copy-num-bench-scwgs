@@ -52,6 +52,14 @@ PLOIDY_WINDOW_HELP = (
     'ploidy falls outside expected +/- this value counts as an outlier (scAbsolute uses 0.5).')
 PLOIDY_CHROMS_HELP = (
     'Chromosomes over which the observed ploidy (mean absolute copy number) is computed.')
+# --ploidy-file runs ploidy_eval.py once per entry here, because the copy-number cap changes
+# what the ploidy means rather than just its precision (see the ploidy_eval.py docstring): the
+# default cap of 10 asks how well the caller places the bulk of the genome, while `inf` asks
+# what its raw output literally implies once focal amplifications are left unbounded.
+# The first (default-cap) run keeps the historical file names, title and numbers; every other
+# entry writes to its own `_maxcn_<value>` scripts and output prefix, so no existing result is
+# overwritten and adding an entry here adds a run rather than changing one.
+PLOIDY_MAX_CNS = [ploidy_eval.DEFAULT_MAX_CN, 'inf']
 # Path templates for the tumor-mode files we add. We keep them under data1to2dir/<donor>
 # (the same place data2from1 already writes its alignment outputs) so the rest of the
 # pipeline can pick them up without changing the directory layout.
@@ -241,24 +249,33 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
             ploidy_file = getattr(args, 'ploidy_file', None)
             if tool in SC_CN_EVAL_TOOLS and ploidy_file:
                 bed_glob = F'{datdir}*intcns.bed'
-                title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
                 metadata_arg = (F'--metadata-tsv "{os.path.abspath(args.SraRunTable)}" '
                                 if getattr(args, 'SraRunTable', None) else '')
-                with cm.myopen(ploidy_script, args.writing_mode) as pf:
-                    cmd = (F'python {root}/copy-num-bench-scwgs/ploidy_eval.py '
-                           F'-i {bed_glob} -o {ploidy_prefix} '
-                           F'--ploidy-file "{os.path.abspath(ploidy_file)}" '
-                           F'{metadata_arg}'
-                           F'--ploidy-window {getattr(args, "ploidy_window", 0.5)} '
-                           F'--chroms {getattr(args, "ploidy_chroms", "autosomes")} '
-                           F'--tool {tool} --donor {donor} --sample-type {sampleType} '
-                           F'--avg-spot-len {avgSpotLen} --plot --title "{title}" '
-                           F'#sequential=ploidy_eval.{tool}/')
-                    write2file(cmd, pf, ploidy_script)
-                deps.append((script2, ploidy_script))
-                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_DSA_{donor}_{sampleType}_{avgSpotLen}.rule'))
-                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_tool_{tool}.rule'))
-                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_all.rule'))
+                for max_cn in PLOIDY_MAX_CNS:
+                    # Empty suffix for the default cap, so that its script, prefix, title and
+                    # #sequential tag stay exactly what they have always been.
+                    sfx = ('' if float(max_cn) == float(ploidy_eval.DEFAULT_MAX_CN)
+                           else F'_maxcn_{max_cn}')
+                    ploidy_script_1 = ploidy_script.removesuffix('.sh') + sfx + '.sh'
+                    ploidy_prefix_1 = ploidy_prefix + sfx
+                    title = (F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
+                             + (F' | max-cn={max_cn}' if sfx else ''))
+                    with cm.myopen(ploidy_script_1, args.writing_mode) as pf:
+                        cmd = (F'python {root}/copy-num-bench-scwgs/ploidy_eval.py '
+                               F'-i {bed_glob} -o {ploidy_prefix_1} '
+                               F'--ploidy-file "{os.path.abspath(ploidy_file)}" '
+                               F'{metadata_arg}'
+                               F'--ploidy-window {getattr(args, "ploidy_window", 0.5)} '
+                               F'--chroms {getattr(args, "ploidy_chroms", "autosomes")} '
+                               F'--max-cn {max_cn} '
+                               F'--tool {tool} --donor {donor} --sample-type {sampleType} '
+                               F'--avg-spot-len {avgSpotLen} --plot --title "{title}" '
+                               F'#sequential=ploidy_eval.{tool}{sfx}/')
+                        write2file(cmd, pf, ploidy_script_1)
+                    deps.append((script2, ploidy_script_1))
+                    deps.append((ploidy_script_1, F'data4from2and3_4_ploidy_eval_DSA_{donor}_{sampleType}_{avgSpotLen}.rule'))
+                    deps.append((ploidy_script_1, F'data4from2and3_4_ploidy_eval_tool_{tool}.rule'))
+                    deps.append((ploidy_script_1, F'data4from2and3_4_ploidy_eval_all.rule'))
     return deps
 def main(args1=None):
     """Entry point used by main.py when --tumor-fastq is set."""
