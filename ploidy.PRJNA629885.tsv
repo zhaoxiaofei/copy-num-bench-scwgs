@@ -1,0 +1,43 @@
+# Expected per-cell ploidy for BioProject PRJNA629885 (ACT single-cell WGS).
+#
+# Source: Minussi DC, Nicholson MD, Ye H, et al. "Breast tumours maintain a reservoir of
+#         subclonal diversity during expansion." Nature 2021;592:302-308.
+#         doi:10.1038/s41586-021-03357-x -- Supplementary Table 1 ("Clinical Tumor
+#         Information and Sequencing Metrics"), column `ploidy`.
+#
+# The published legend defines that column as the FACS mean ploidy of the aneuploid cell
+# population (DAPI staining). That is exactly the experimental point estimate scAbsolute
+# (Genome Biol 2024;25:62) uses as ground truth for this ACT dataset, so `ploidy` below is
+# the p_exp fed to ploidy_eval.py. Values are per sample, not per cell: real cell-to-cell
+# ploidy variation exists within each sample and is part of what the +/-0.5 window absorbs.
+#
+# Columns
+#   sample             canonical sample id (used in all output tables)
+#   ploidy             expected ploidy = mean absolute copy number (scAbsolute Eq. 1 scale)
+#   aliases            '|'-separated alternative spellings; 're:<regex>' is matched as a regex
+#   n_cells_published  number of single cells sequenced, per Table S1 (sanity check only)
+#   sample_type        tumor | cell_line
+#   source             provenance of the ploidy value
+#
+# NOTE ON NAME MATCHING: the ACT run titles in SRA are of the form <sample>_S<sector>_C<cell>
+# (e.g. TN2_S6_C359), which ploidy_eval.py collapses to the sample id by token-prefix backoff.
+# The TN1-TN8 ids are confirmed against the SRA titles for this BioProject. The cell-line
+# aliases below are written generously because the exact cell-line spelling used in the run
+# table was not verified; check them against your SraRunTable and extend the `aliases` column
+# if any cell-line cells show up as unresolved.
+#
+#sample	ploidy	aliases	n_cells_published	sample_type	source
+TN1	3.45	TN-1|TN01|TN1_10xCNA	1100	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN2	3.03	TN-2|TN02	1024	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN3	3.44	TN-3|TN03|TN3_10xCNA	1101	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN4	3.76	TN-4|TN04	1307	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN5	2.65	TN-5|TN05	1238	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN6	3.17	TN-6|TN06	1378	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN7	3.15	TN-7|TN07	1393	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+TN8	3.95	TN-8|TN08	1224	tumor	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+MDAMB231c28	2.41	MDA-MB-231 EX-1|MDAMB231EX1|MDA-MB-231_EX1|MDA-MB-EX1|MDA-EX1|MB231EX1|EX1	995	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+MDAMB231c8	2.41	MDA-MB-231 EX-2|MDAMB231EX2|MDA-MB-231_EX2|MDA-MB-EX2|MDA-EX2|MB231EX2|EX2	897	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+MDAMB231_popp31	2.41	MDA-MB-231 PARENTAL|MDAMB231|MDA_MB_231|MDA-MB-231-PARENTAL|MB231|MB-231	820	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+mb157	2.55	MDAMB157|MDA_MB_157|MB157|MB-157	1210	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+BT20	2.7	BT20|BT_20	1231	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
+mb453	4.17	MDAMB453|MDA_MB_453|MB453|MB-453	1260	cell_line	Minussi 2021 Nature, Supplementary Table 1 (FACS/DAPI mean ploidy)
