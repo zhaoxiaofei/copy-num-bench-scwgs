@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# https://claude.ai/chat/1154badf-2241-4cce-9e52-7c5565f9abe3
+# revised by: https://claude.ai/chat/1154badf-2241-4cce-9e52-7c5565f9abe3
 
 """
 Compare the observed per-cell ploidy (inferred by a benchmarked scWGS CNV caller) against the
@@ -127,6 +127,45 @@ def _norm_key(name):
     lets one ploidy file serve run tables that were curated by different people.
     """
     return re.sub(r'[^a-z0-9]', '', str(name).strip().lower())
+
+
+# On simulated data the ground truth is not a per-sample number from the literature but the
+# simulator's own CN profile for each individual cell, written next to the simulated BAM by
+# data3from2.py. Reading the expected ploidy out of those BEDs with bed_to_ploidy() -- the same
+# function that turns a caller's BED into an observed ploidy -- keeps truth and estimate on
+# exactly the same footing, including the --chroms and --max-cn conventions.
+TRUTH_BED_SUFFIX = '_simtruth.bed'
+
+
+def load_truth_ploidies(patterns, chroms=None, weight='length', max_cn=DEFAULT_MAX_CN,
+                        suffix=TRUTH_BED_SUFFIX):
+    """{simulated cell name -> expected ploidy}, from the simulator's per-cell truth BEDs."""
+    files = []
+    for pat in patterns:
+        files.extend(sorted(glob.glob(pat)) if any(c in pat for c in '*?[') else [pat])
+    truth = {}
+    for path in files:
+        if not (os.path.isfile(path) and os.path.getsize(path)):
+            continue
+        base = os.path.basename(path)
+        # The suffix already ends in `.bed`, so it must be removed in one step, not on top of a
+        # separate extension strip.
+        cell = base[:-len(suffix)] if base.endswith(suffix) else re.sub(r'\.bed$', '', base)
+        truth[cell] = bed_to_ploidy(path, chroms=chroms, weight=weight, max_cn=max_cn)[0]
+    return truth
+
+
+def truth_lookup(cell, truth):
+    """The truth entry belonging to one called cell, or None.
+
+    A caller names its per-cell BED `<caller tags>_4from3_<simulated cell>_intcns.bed` while a
+    ploidy-inference tool reports the simulated cell name itself, so a suffix match resolves
+    both. Longest key first, because simulated cell names share long prefixes.
+    """
+    stem = re.sub(r'_(int|dep)cns$', '', re.sub(r'\.bed$', '', os.path.basename(str(cell))))
+    if stem in truth:
+        return stem
+    return next((k for k in sorted(truth, key=len, reverse=True) if stem.endswith(k)), None)
 
 
 class PloidyTable:
@@ -510,8 +549,15 @@ def build_parser():
     p.add_argument('-i', '--input', nargs='+', required=True,
                    help='Per-cell integer-CN BED files or globs (typically *_intcns.bed)')
     p.add_argument('-o', '--output-prefix', required=True)
-    p.add_argument('--ploidy-file', required=True,
+    p.add_argument('--ploidy-file', default='',
                    help='TSV mapping sample -> expected ploidy (columns: sample, ploidy, [aliases])')
+    p.add_argument('--truth-bed', nargs='+', default=None, help=(
+                   F'Per-cell truth BED files or globs (typically *{TRUTH_BED_SUFFIX}) written by '
+                   'the CN simulator; an alternative to --ploidy-file for simulated data, where '
+                   'the expected ploidy is known per cell rather than per sample'))
+    p.add_argument('--sample-label', default='', help=(
+                   'Group every cell under this sample name instead of resolving one per cell; '
+                   'used with --truth-bed, where one run covers one simulated cell line'))
     p.add_argument('--metadata-tsv', default='',
                    help='SraRunTable used to map run accessions in the BED names to sample labels')
     p.add_argument('--sample-key-columns', nargs='+', default=None,
@@ -545,7 +591,10 @@ def build_parser():
 def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(pathname)s:%(lineno)d %(levelname)s - %(message)s')
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not (args.ploidy_file or args.truth_bed):
+        parser.error('one of --ploidy-file (experimental ploidy) or --truth-bed (simulated truth) is required')
 
     files = []
     for pat in args.input:
@@ -555,16 +604,25 @@ def main(argv=None):
         sys.stderr.write('ploidy_eval: no usable input BED files.\n')
         return 1
 
-    table = load_ploidy_table(args.ploidy_file)
-    run2labels = load_run_labels(args.metadata_tsv, args.sample_key_columns)
     chroms = AUTOSOMES if args.chroms == 'autosomes' else ALL_CHROMS
-    logging.info('ploidy file %s: %d samples; metadata: %d runs; %d BED files',
-                 args.ploidy_file, len(table), len(run2labels), len(files))
+    table = load_ploidy_table(args.ploidy_file) if args.ploidy_file else None
+    truth = (load_truth_ploidies(args.truth_bed, chroms=chroms, weight=args.weight,
+                                 max_cn=args.max_cn) if args.truth_bed else None)
+    run2labels = load_run_labels(args.metadata_tsv, args.sample_key_columns)
+    logging.info('truth: %s (%d entries); metadata: %d runs; %d BED files',
+                 (args.truth_bed if truth is not None else args.ploidy_file),
+                 (len(truth) if truth is not None else len(table)), len(run2labels), len(files))
 
     records, unresolved = [], []
     for path in files:
         cands, run = cell_candidates(path, run2labels, args.sample_regex or None)
-        sample, expected, matched = table.lookup(cands)
+        if truth is None:
+            sample, expected, matched = table.lookup(cands)
+        else:
+            # Simulated data: the expected ploidy is this very cell's simulated CN profile.
+            matched = truth_lookup(path, truth)
+            expected = truth[matched] if matched else float('nan')
+            sample = ((args.sample_label or matched) if matched and np.isfinite(expected) else None)
         if sample is None:
             unresolved.append((path, cands[:4]))
             continue
@@ -597,7 +655,8 @@ def main(argv=None):
     percell = pd.DataFrame(records)
     per_sample, overall = summarize_by_sample(percell, args.ploidy_window)
     overall.update({'n_cells_unresolved': len(unresolved), 'n_bed_files': len(files),
-                    'ploidy_file': os.path.abspath(args.ploidy_file),
+                    'ploidy_file': (os.path.abspath(args.ploidy_file) if args.ploidy_file else ''),
+                    'truth_bed': (args.truth_bed or ''),
                     'chroms': args.chroms, 'weight': args.weight,
                     # A string when uncapped, so that the file stays valid JSON for readers
                     # that reject the Infinity literal.

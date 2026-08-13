@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Revised by: https://claude.ai/chat/1154badf-2241-4cce-9e52-7c5565f9abe3
+# revised by: https://claude.ai/chat/1154badf-2241-4cce-9e52-7c5565f9abe3
 
 """
 Benchmark *ploidy-inference* tools -- tools whose primary output is a ploidy estimate rather
@@ -17,6 +17,25 @@ copy number (scAbsolute Eq. 1). A ploidy-inference tool instead *reports* ploidy
 there is no BED to read and the existing evaluation step cannot be pointed at it. This module
 supplies the missing piece -- running the tool, normalising its output, and scoring it with the
 very same metrics -- and nothing else.
+
+Where the ground truth comes from
+--------------------------------
+  * Real tumors (`--tumor-fastq`): the experimental FACS/DAPI ploidy of `--ploidy-file`, one
+    number per sample.
+  * Simulated data (no `--tumor-fastq`): the simulator's own per-cell CN profile, the
+    `*_simtruth.bed` that data3from2.py writes next to each simulated BAM. The expected ploidy
+    is then known exactly, per cell rather than per sample, and is read with the same
+    bed_to_ploidy() that turns a caller's BED into an observed ploidy -- so truth and estimate
+    share the `--chroms` and `--max-cn` conventions and the comparison is like for like.
+    Only the post-simulation cells are scored; the pre-simulation germline cells are the raw
+    material of the simulation and the pipeline normalises their calls to an overall-haploid
+    scale, so no absolute ploidy is defined for them. The ploidy tool still runs on them, as
+    every caller in this repository does, and its calls are written out for inspection.
+
+In the simulated mode `--ploidy-tools` also switches on a ploidy evaluation of the ordinary
+CNV callers against the same simulated truth, which is what makes the benchmark a comparison:
+scAbsolute, which reports ploidy, against nine callers whose ploidy is implied by their
+segments -- on data whose answer is known by construction.
 
 Strict backward compatibility
 -----------------------------
@@ -71,6 +90,7 @@ import pandas as pd
 
 import common as cm
 from common import change_file_ext, find_replace_all, write2file
+import data_tumor
 import ploidy_eval as pe
 
 # ---------------------------------------------------------------------------------------------
@@ -104,6 +124,17 @@ t_facs = ('<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_
 t_prefix = ('<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>'
             '_ploidy_tool_eval')
 
+# Post-simulation counterparts, derived from the canonical templates so that they cannot drift
+# away from where data4from2and3.py puts the simulated cells and their per-cell truth BEDs.
+g_datdir = cm.t4from3datdir                                             # .../4from3_..._<tool>.datdir/
+g_calls = g_datdir + '2_<donor>_3_<sampleType>_<avgSpotLen>_<cellLine>_4_step<tool_order>_<tool>_4from3_ploidy_calls.tsv'
+g_facs = g_datdir + '2_<donor>_3_<sampleType>_<avgSpotLen>_<cellLine>_4_step<tool_order>_<tool>_4from3_ginkgo_facs.txt'
+g_prefix_tool = g_datdir[:-len('.datdir/')] + '_ploidy_tool_eval'       # ploidy-inference tools
+g_prefix_call = g_datdir[:-len('.datdir/')] + '_ploidy_eval'            # CNV callers, as in data_tumor.py
+g_script_call = cm.t3into4script.replace('_3into4_call.sh', '_3into4_ploidy_eval.sh')
+g_script_tool = cm.t3into4script.replace('_3into4_call.sh', '_3into4_ploidy_tool_eval.sh')
+g_truth_glob = os.path.dirname(cm.t3from2simbed) + '/*' + pe.TRUTH_BED_SUFFIX
+
 # Both stay empty unless setup() runs, which is what makes the feature inert by default.
 _CFG = {}
 _CALLS = {}   # (donor, sampleType, avgSpotLen) -> dict(calls=, facs=, script=, tool=)
@@ -124,12 +155,14 @@ def setup(d4, tools, ploidy_tools, args):
     if not ploidy_tools: return tools
     unknown = [tool for tool in ploidy_tools if tool not in TOOLS]
     if unknown: raise ValueError(F'Unknown ploidy-inference tool(s) {unknown}; known: {TOOLS}')
-    # Experimental ploidy is what a ploidy tool is scored against, and only the tumor mode
-    # (data_tumor.py) knows about it, so fail here instead of generating unusable rules.
-    if not getattr(args, 'tumor_fastq', False): raise ValueError('--ploidy-tools requires --tumor-fastq')
-    if not getattr(args, 'ploidy_file', None): raise ValueError('--ploidy-tools requires --ploidy-file')
+    # Real tumors have no simulated truth, so there the experimental ploidy file is mandatory;
+    # simulated data carries its own per-cell truth BEDs and needs nothing extra.
+    simulated = not getattr(args, 'tumor_fastq', False)
+    if not simulated and not getattr(args, 'ploidy_file', None):
+        raise ValueError('--ploidy-tools requires --ploidy-file when used with --tumor-fastq')
     facs = bool(getattr(args, 'ploidy_facs', False))
-    _CFG.update(tools=ploidy_tools, facs=facs, ploidy_file=os.path.abspath(args.ploidy_file),
+    _CFG.update(tools=ploidy_tools, facs=facs, simulated=simulated, d4=d4,
+                ploidy_file=(os.path.abspath(args.ploidy_file) if getattr(args, 'ploidy_file', None) else ''),
                 window=getattr(args, 'ploidy_window', pe.DEFAULT_PLOIDY_WINDOW),
                 chroms=getattr(args, 'ploidy_chroms', 'autosomes'),
                 metadata_tsv=(os.path.abspath(args.SraRunTable) if getattr(args, 'SraRunTable', None) else ''),
@@ -161,9 +194,61 @@ def _wrap(original):
         if tool in _CFG.get('tools', ()): return _gen_ploidy_tool(infodict, tool, params)
         if tool.startswith(FACS_PREFIX) and _CFG.get('facs'):
             return _gen_facs_ginkgo(original, infodict, tool, args, kwargs, params)
-        return original(infodict, tool, *args, **kwargs)
+        out = original(infodict, tool, *args, **kwargs)
+        # On simulated data every CNV caller is scored on ploidy too, against the same truth,
+        # which is what turns the ploidy tool's numbers into a comparison. Post-simulation
+        # cells only: the pre-simulation calls are normalised to an overall-haploid scale.
+        if (_CFG.get('simulated') and not params.get('is_overall_haploid', True)
+                and tool in _CFG['d4'].SC_CN_EVAL_TOOLS):
+            return (list(out[0]) + _gen_caller_ploidy_eval(infodict, tool, params),) + tuple(out[1:])
+        return out
     run_tool_1._ploidy_tools = True
     return run_tool_1
+
+
+def _sim_eval(infodict, params, script_tpl, prefix_tpl, cmd_fn, rule_stem, src_script):
+    """One evaluation script per --max-cn setting, scored against the simulated per-cell truth.
+
+    The cap changes what a ploidy means rather than just its precision (see ploidy_eval.py), and
+    it is applied to the truth as well as to the estimate, so both settings have to be evaluated
+    the same way here as data_tumor.py does for real tumors.
+    """
+    deps = []
+    truth_glob, = find_replace_all([g_truth_glob], infodict)
+    for max_cn in data_tumor.PLOIDY_MAX_CNS:
+        sfx = '' if float(max_cn) == float(pe.DEFAULT_MAX_CN) else F'_maxcn_{max_cn}'
+        script, prefix = find_replace_all([script_tpl, prefix_tpl], infodict)
+        script, prefix = script.removesuffix('.sh') + sfx + '.sh', prefix + sfx
+        cm.makedirs((script, prefix))
+        with cm.myopen(script, params['writing_mode']) as fh:
+            write2file(cmd_fn(truth_glob, prefix, max_cn, sfx), fh, script)
+        deps.append((src_script, script))
+        for rule in (F'data4from2and3_{rule_stem}_DSA_{infodict["donor"]}_{infodict["sampleType"]}_{infodict["avgSpotLen"]}.rule',
+                     F'data4from2and3_{rule_stem}_cellLine_{infodict["cellLine"]}.rule',
+                     F'data4from2and3_{rule_stem}_tool_{infodict["tool"]}.rule',
+                     F'data4from2and3_{rule_stem}_all.rule'):
+            deps.append((script, rule))
+    return deps
+
+
+def _gen_caller_ploidy_eval(infodict, tool, params):
+    """ploidy_eval.py on one caller's simulated per-cell BEDs, in the layout of data_tumor.py."""
+    datdir, = find_replace_all([cm.t4from3datdir], infodict)
+    label = infodict['cellLine']
+
+    def cmd_fn(truth_glob, prefix, max_cn, sfx):
+        title = (F'{tool} | cellLine={label} donor={infodict["donor"]} '
+                 F'sampleType={infodict["sampleType"]} avgSpotLen={infodict["avgSpotLen"]}'
+                 + (F' | max-cn={max_cn}' if sfx else ''))
+        return (F'python {params["rootdir"]}/copy-num-bench-scwgs/ploidy_eval.py '
+                F'-i {datdir}*intcns.bed -o {prefix} --truth-bed "{truth_glob}" '
+                F'--sample-label {label} --ploidy-window {_CFG["window"]} '
+                F'--chroms {_CFG["chroms"]} --max-cn {max_cn} '
+                F'--tool {tool} --donor {infodict["donor"]} --sample-type {infodict["sampleType"]} '
+                F'--avg-spot-len {infodict["avgSpotLen"]} --plot --title "{title}" '
+                F'#sequential=ploidy_eval.{tool}{sfx}/')
+    return _sim_eval(infodict, params, g_script_call, g_prefix_call, cmd_fn,
+                     '4_ploidy_eval', params['script2'])
 
 
 def _run_cmd(tool, rootdir, indir, calls):
@@ -185,9 +270,16 @@ def _gen_ploidy_tool(infodict, tool, params):
     script, script2, tmpdir = params['script'], params['script2'], params['tmpdir']
     rootdir, wmode, visited = params['rootdir'], params['writing_mode'], params['visited_scripts']
     donor, sampleType, avgSpotLen = infodict['donor'], infodict['sampleType'], infodict['avgSpotLen']
-    calls, facs, prefix = find_replace_all([t_calls, t_facs, t_prefix], infodict)
+    # Simulated data has two runs per tool: the pre-simulation germline cells (whose calls the
+    # pipeline normalises to an overall-haploid scale, so no absolute ploidy is defined for
+    # them) and the post-simulation cells, which carry a per-cell truth BED.
+    presim = bool(_CFG.get('simulated') and params.get('is_overall_haploid', False))
+    postsim = bool(_CFG.get('simulated') and not presim)
+    calls, facs, prefix = find_replace_all(
+        [g_calls, g_facs, g_prefix_tool] if postsim else [t_calls, t_facs, t_prefix], infodict)
     cm.makedirs((calls,))
-    _CALLS[(donor, sampleType, avgSpotLen)] = dict(calls=calls, facs=facs, script=script, tool=tool)
+    _CALLS[(donor, sampleType, avgSpotLen, infodict.get('cellLine', ''), presim)] = dict(
+        calls=calls, facs=facs, script=script, tool=tool)
 
     bams = sorted(params['inbam2call'].keys())
     bais = [change_file_ext(bam, 'bam.bai') for bam in bams]
@@ -197,29 +289,48 @@ def _gen_ploidy_tool(infodict, tool, params):
     if _CFG.get('facs'):
         cmd += F' && python {rootdir}/copy-num-bench-scwgs/ploidy_tools.py facs -i {calls} -o {facs}'
     cmd += F' #sequential=run.{tool}/'
-    metadata_arg = (F'--metadata-tsv "{_CFG["metadata_tsv"]}" ' if _CFG.get('metadata_tsv') else '')
-    title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
-    cmd2 = (F'python {rootdir}/copy-num-bench-scwgs/ploidy_tools.py eval '
+
+    deps, scripts = [], [(script, cmd)]
+    if not _CFG.get('simulated'):
+        metadata_arg = (F'--metadata-tsv "{_CFG["metadata_tsv"]}" ' if _CFG.get('metadata_tsv') else '')
+        title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
+        scripts.append((script2,
+            F'python {rootdir}/copy-num-bench-scwgs/ploidy_tools.py eval '
             F'-i {calls} -o {prefix} --ploidy-file "{_CFG["ploidy_file"]}" {metadata_arg}'
             F'--ploidy-window {_CFG["window"]} '
             F'--tool {tool} --donor {donor} --sample-type {sampleType} '
-            F'--avg-spot-len {avgSpotLen} --plot --title "{title}" #sequential=ploidy_tool_eval.{tool}/')
+            F'--avg-spot-len {avgSpotLen} --plot --title "{title}" #sequential=ploidy_tool_eval.{tool}/'))
 
-    deps = []
-    for fname, text in ((script, cmd), (script2, cmd2)):
+    for fname, text in scripts:
         if fname in visited:
             logging.info(F'  Skip generating the script {fname} because it has already been generated. ')
             continue
         with cm.myopen(fname, wmode) as file: write2file(text, file, fname)
         visited.add(fname)
-    deps.append((script, script2))
     for rule in (F'data4from2and3_1_run_DSA_{donor}_{sampleType}_{avgSpotLen}.rule',
                  F'data4from2and3_1_run_tool_{tool}.rule', 'data4from2and3_1_run_all.rule'):
         deps.append((script, rule))
-    for rule in (F'data4from2and3_5_ploidy_tool_eval_DSA_{donor}_{sampleType}_{avgSpotLen}.rule',
-                 F'data4from2and3_5_ploidy_tool_eval_tool_{tool}.rule',
-                 'data4from2and3_5_ploidy_tool_eval_all.rule'):
-        deps.append((script2, rule))
+    if postsim:
+        # Scored exactly like the CNV callers above, against the same per-cell truth BEDs.
+        def cmd_fn(truth_glob, prefix_1, max_cn, sfx):
+            title = (F'{tool} | cellLine={infodict["cellLine"]} donor={donor} '
+                     F'sampleType={sampleType} avgSpotLen={avgSpotLen}'
+                     + (F' | max-cn={max_cn}' if sfx else ''))
+            return (F'python {rootdir}/copy-num-bench-scwgs/ploidy_tools.py eval '
+                    F'-i {calls} -o {prefix_1} --truth-bed "{truth_glob}" '
+                    F'--sample-label {infodict["cellLine"]} --ploidy-window {_CFG["window"]} '
+                    F'--chroms {_CFG["chroms"]} --max-cn {max_cn} '
+                    F'--tool {tool} --donor {donor} --sample-type {sampleType} '
+                    F'--avg-spot-len {avgSpotLen} --plot --title "{title}" '
+                    F'#sequential=ploidy_tool_eval.{tool}{sfx}/')
+        deps.extend(_sim_eval(infodict, params, g_script_tool, g_prefix_tool, cmd_fn,
+                              '5_ploidy_tool_eval', script))
+    elif not _CFG.get('simulated'):
+        deps.append((script, script2))
+        for rule in (F'data4from2and3_5_ploidy_tool_eval_DSA_{donor}_{sampleType}_{avgSpotLen}.rule',
+                     F'data4from2and3_5_ploidy_tool_eval_tool_{tool}.rule',
+                     'data4from2and3_5_ploidy_tool_eval_all.rule'):
+            deps.append((script2, rule))
     return deps, [cmd], {}, {}
 
 
@@ -229,7 +340,9 @@ def _gen_facs_ginkgo(original, infodict, tool, args, kwargs, params):
     Ginkgo is run through the unmodified run_tool_1, and only the two anchors that the FACS
     file has to reach are rewritten afterwards, the same trick gink_custom_binning.py uses.
     """
-    key = (infodict['donor'], infodict['sampleType'], infodict['avgSpotLen'])
+    key = (infodict['donor'], infodict['sampleType'], infodict['avgSpotLen'],
+           infodict.get('cellLine', ''),
+           bool(_CFG.get('simulated') and params.get('is_overall_haploid', False)))
     called = _CALLS.get(key)
     if not called: raise ValueError(F'{tool}: no ploidy calls were generated for {key}')
     deps, cmds, bam2bed, lib2bed = original(infodict, 'ginkgo', *args, **kwargs)
@@ -302,16 +415,27 @@ def _facs_main(args):
 def _eval_main(args):
     """Score reported ploidies with the scAbsolute metrics implemented in ploidy_eval.py."""
     calls = read_calls(args.input)
-    table = pe.load_ploidy_table(args.ploidy_file)
+    chroms = pe.AUTOSOMES if args.chroms == 'autosomes' else pe.ALL_CHROMS
+    table = pe.load_ploidy_table(args.ploidy_file) if args.ploidy_file else None
+    # Simulated data: the expected ploidy of each cell is its own simulated CN profile, read the
+    # same way a caller's BED is read, so that truth and estimate are on the same footing.
+    truth = (pe.load_truth_ploidies(args.truth_bed, chroms=chroms, weight='length',
+                                    max_cn=args.max_cn) if args.truth_bed else None)
     run2labels = pe.load_run_labels(args.metadata_tsv, args.sample_key_columns)
-    logging.info('ploidy file %s: %d samples; metadata: %d runs; %d ploidy calls',
-                 args.ploidy_file, len(table), len(run2labels), len(calls))
+    logging.info('truth: %s (%d entries); metadata: %d runs; %d ploidy calls',
+                 (args.truth_bed if truth is not None else args.ploidy_file),
+                 (len(truth) if truth is not None else len(table)), len(run2labels), len(calls))
 
     records, unresolved = [], []
     extras = [c for c in calls.columns if c not in ('cell', 'ploidy')]
     for row in calls.to_dict('records'):
         cands, run = pe.cell_candidates(str(row['cell']), run2labels, args.sample_regex or None)
-        sample, expected, matched = table.lookup(cands)
+        if truth is None:
+            sample, expected, matched = table.lookup(cands)
+        else:
+            matched = pe.truth_lookup(str(row['cell']), truth)
+            expected = truth[matched] if matched else float('nan')
+            sample = ((args.sample_label or matched) if matched and np.isfinite(expected) else None)
         if sample is None:
             unresolved.append((row['cell'], cands[:4]))
             continue
@@ -344,7 +468,9 @@ def _eval_main(args):
     per_sample['sample_within_window'] = per_sample['sample_abs_ploidy_distance'] <= args.ploidy_window
     overall.update({
         'n_calls': int(len(calls)), 'n_cells_unresolved': len(unresolved),
-        'ploidy_file': os.path.abspath(args.ploidy_file), 'ploidy_calls': args.input,
+        'ploidy_file': (os.path.abspath(args.ploidy_file) if args.ploidy_file else ''),
+        'truth_bed': (args.truth_bed or ''), 'ploidy_calls': args.input,
+        'max_cn': ('inf' if pe.is_uncapped(args.max_cn) else float(args.max_cn)),
         'mean_abs_sample_ploidy_distance': float(per_sample['sample_abs_ploidy_distance'].mean()),
         'pct_samples_within_window': float(100.0 * per_sample['sample_within_window'].mean()),
         'tool': args.tool, 'donor': args.donor,
@@ -380,8 +506,17 @@ def build_parser():
                         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ev.add_argument('-i', '--input', nargs='+', required=True, help='Ploidy-calls TSV files or globs')
     ev.add_argument('-o', '--output-prefix', required=True)
-    ev.add_argument('--ploidy-file', required=True,
+    ev.add_argument('--ploidy-file', default='',
                     help='TSV mapping sample -> expected ploidy (columns: sample, ploidy, [aliases])')
+    ev.add_argument('--truth-bed', nargs='+', default=None, help=(
+                    F'Per-cell truth BED files or globs (typically *{pe.TRUTH_BED_SUFFIX}) written '
+                    'by the CN simulator; the alternative to --ploidy-file on simulated data'))
+    ev.add_argument('--sample-label', default='',
+                    help='Group every cell under this sample name (used with --truth-bed)')
+    ev.add_argument('--chroms', choices=['autosomes', 'all'], default='autosomes',
+                    help='Chromosomes over which a truth BED is averaged into an expected ploidy')
+    ev.add_argument('--max-cn', type=pe.parse_max_cn, default=pe.DEFAULT_MAX_CN,
+                    help='Cap applied to the truth copy numbers before averaging; inf to not cap')
     ev.add_argument('--metadata-tsv', default='',
                     help='SraRunTable used to map run accessions in the cell names to sample labels')
     ev.add_argument('--sample-key-columns', nargs='+', default=None,
@@ -411,7 +546,10 @@ def build_parser():
 def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(pathname)s:%(lineno)d %(levelname)s - %(message)s')
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.subcommand == 'eval' and not (args.ploidy_file or args.truth_bed):
+        parser.error('one of --ploidy-file (experimental ploidy) or --truth-bed (simulated truth) is required')
     return _eval_main(args) if args.subcommand == 'eval' else _facs_main(args)
 
 
