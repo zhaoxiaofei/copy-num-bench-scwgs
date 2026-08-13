@@ -1,0 +1,25 @@
+#dataset_id	mode	accession	alt_accession	donor	sample_type	platform	access	url	notes
+# alt_accession: the same study under its other INSDC form (BioProject PRJNA/PRJEB vs
+# secondary study SRP/ERP). 'none' = no second accession exists (10x-hosted data that was
+# never deposited to INSDC). 'NA' = not yet resolved; run:
+#     python fetch_public_scwgs.py --fill-alt-accessions
+# which asks ENA for each pair and writes them back here. Do not fill these in by hand.
+colo829_10x_G1_1k	tenx_bam	GSE151409	NA	COLO829	cell-line	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/colo829_G1_1k/colo829_G1_1k_possorted_bam.bam	10x scCNV, ~1475 G1-sorted cells, CC-BY-4.0. Velazquez-Villarreal 2020 Commun Biol Fig 3. GEO series: ENA cannot resolve the pair, take the SRP from the GEO page.
+colo829_10x_G1_1_0_0	tenx_bam	GSE151409	NA	COLO829	cell-line	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.0.0/colo829_G1_1k/colo829_G1_1k_possorted_bam.bam	10x scCNV, ~1475 G1-sorted cells, CC-BY-4.0. Velazquez-Villarreal 2020 Commun Biol Fig 3. GEO series: ENA cannot resolve the pair, take the SRP from the GEO page.
+breast_tissue_A_2k	tenx_bam	10x-breast-S0-A	none	breastS0	tumor	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/breast_tissue_A_2k/breast_tissue_A_2k_possorted_bam.bam	Section A of the 5-section breast tumour re-analysed by CHISEL. 10x-hosted only; the accession is a synthetic study id used to group the sections.
+breast_tissue_B_2k	tenx_bam	10x-breast-S0-B	none	breastS0	tumor	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/breast_tissue_B_2k/breast_tissue_B_2k_possorted_bam.bam	Section B.
+breast_tissue_C_2k	tenx_bam	10x-breast-S0-C	none	breastS0	tumor	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/breast_tissue_C_2k/breast_tissue_C_2k_possorted_bam.bam	Section C.
+breast_tissue_D_2k	tenx_bam	10x-breast-S0-D	none	breastS0	tumor	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/breast_tissue_D_2k/breast_tissue_D_2k_possorted_bam.bam	Section D.
+breast_tissue_E_2k	tenx_bam	10x-breast-S0-E	none	breastS0	tumor	ILLUMINA	open	https://s3-us-west-2.amazonaws.com/10x.files/samples/cell-dna/1.1.0/breast_tissue_E_2k/breast_tissue_E_2k_possorted_bam.bam	Section E. URL form confirmed working.
+gastric_10x_andor2020	tenx_bam	PRJNA498809	GSE142750	gastric-lines	cell-line	ILLUMINA	open	NA	Andor 2020 NAR-GAB. Submitter-supplied BAMs on SRA: list runs with --mode ena, then pass each possorted BAM via --bam. GEO mirror cited in the paper.
+tnbc_kim2018	ena	SRP114962	NA	TNBC	tumor	ILLUMINA	open	NA	Kim 2018 Cell. One SRR per cell (DOP-PCR). Large: use --max-cells for a pilot.
+bakker2016_aneufinder	ena	E-MTAB-4183	NA	TALL-BALL	tumor	ILLUMINA	open	NA	Bakker 2016 Genome Biol. SINGLE-end 50bp; mouse T-ALL (mm10) + human B-ALL (hg19). Filter by scientific_name before aligning to hg19.
+chavli2024_blastocyst	ena	PRJEB68313	NA	blastocyst	embryo	ILLUMINA	CONTROLLED	NA	EGA controlled access. Refused unless --allow-controlled is passed.
+crc_leung2017	ena	SRP074289	NA	CRC1-CRC2	tumor	ILLUMINA	open	NA	Leung 2017 Genome Res, metastatic colorectal cancer (Navin lab). One run per cell. Several runs are annotated PAIRED but hold single-end reads: pass --infer-library-layout to main.py.
+breast_navin2011	ena	SRA018951	NA	T10-T16	tumor	ILLUMINA	open	NA	Navin 2011 Nature, the founding scWGS CNV heatmap (DOP-PCR, FACS ploidy). Single-end. Legacy SRA* submission accession: --fill-alt-accessions is the quickest way to get a form ENA indexes.
+tnbc_wang2014	ena	SRA053195	NA	TNBC	tumor	ILLUMINA	open	NA	Wang 2014 Nature, single nucleus genome+exome. Legacy SRA* accession, same caveat as above.
+tnbc_gao2016	ena	SRP064210	NA	TNBC	tumor	ILLUMINA	open	NA	Gao 2016 Nat Genet, punctuated copy number evolution (DOP-PCR). Cited as a comparison set by the Navin lab.
+all_gawad2014	ena	SRP044380	NA	ALL	tumor	ILLUMINA	open	NA	Gawad 2014 PNAS, acute lymphoblastic leukaemia single cells.
+act_minussi2021	ena	PRJNA629885	SRP259526	breast-ACT	tumor	ILLUMINA	open	NA	Minussi 2021 Nature 592:302, ACT: 16178 cells from 8 TNBC (TN1-TN8) + 4 cell lines (MB-231/MB-157/MB-453/BT-20). FACS-DAPI ploidy is an experimental ground truth; scAbsolute reports 59-69 pct wrong-ploidy cells for Ginkgo on TN6/TN8/MB-453. Pair confirmed from the SRA study page.
+copykit_metastatic	ena	PRJNA785341	NA	metastatic	tumor	ILLUMINA	open	NA	CopyKit paper (Navin lab), new scDNA-seq of metastatic tumours. Their own integer calls are published alongside.
+arcwell_breast	ena	PRJNA799605	NA	breast-FFPE	tumor	ILLUMINA	open	NA	Arc-well FFPE scDNA (Navin lab), cited alongside the sets above as a method comparison.
