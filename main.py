@@ -7,6 +7,7 @@ import gink_custom_binning
 from data2from1 import NUM_CPUS
 from data3from2 import cosmic_cell_lines, DOWNSAMPLE_METHODS
 from data4from2and3 import SC_CN_TOOLS
+from ploidy_eval import DEFAULT_PLOIDY_WINDOW
 
 EVAL_STEPS = ['2from1', '3from2', '4from2and3']
 def main():
@@ -38,6 +39,11 @@ def main():
         'fails with a missing <accession>_2.fastq.gz. When set, any run whose read 2 is '
         'absent or holds no reads is aligned as SINGLE. Off by default: it stats each read 2.'))
     parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
+    parser.add_argument('--ploidy-file', default=None, help=data_tumor.PLOIDY_FILE_HELP)
+    parser.add_argument('--ploidy-window', type=float, default=DEFAULT_PLOIDY_WINDOW,
+        help=data_tumor.PLOIDY_WINDOW_HELP)
+    parser.add_argument('--ploidy-chroms', choices=['autosomes', 'all'], default='autosomes',
+        help=data_tumor.PLOIDY_CHROMS_HELP)
 
     parser.add_argument('--donor', default='tumor')
     parser.add_argument('--sampleType', default='tumor')

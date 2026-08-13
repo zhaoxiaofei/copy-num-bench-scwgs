@@ -11,8 +11,21 @@ This module is a thin tumor-mode counterpart to (data2from1 + data3from2 + data4
 The flow per donor / sample-type / spot-length group is:
     align FASTQ -> BAM   (one BAM per tumor cell, in a persistent datdir)
     -> run each requested CNV caller on the set of BAMs
-    -> aggregate per-cell CNV BEDs into a clustered heatmap (PDF + PNG) per caller.
+    -> aggregate per-cell CNV BEDs into a clustered heatmap (PDF + PNG) per caller
+    -> (optional) compare observed vs expected per-cell ploidy, when --ploidy-file is given.
 Activated when main.py is invoked with --tumor-fastq.
+
+Ploidy evaluation (--ploidy-file)
+---------------------------------
+Real tumor data has no simulated ground truth, so the germline-mode evaluation in
+data4from2and3 does not apply. What some public datasets *do* have is an orthogonal,
+experimental ploidy estimate per sample (FACS/DAPI or karyotype). Passing a ploidy file --
+a TSV mapping sample -> expected ploidy -- adds a per-caller evaluation step that scores the
+caller's inferred per-cell ploidy against that expectation with the metrics from scAbsolute
+(Schneider et al., Genome Biol 2024;25:62): the percentage of cells falling outside a
++/-0.5 window around the experimental point estimate, and the mean absolute ploidy distance
+across cells. The heavy lifting lives in ploidy_eval.py; this module only wires up the
+snakemake rule. Ready-made ploidy file: ploidy.PRJNA629885.tsv (Minussi et al. 2021 ACT data).
 """
 import argparse, logging, os
 import pandas as pd
@@ -20,10 +33,25 @@ import common as cm
 from common import find_replace_all, write2file
 import data2from1
 import data4from2and3 as d4
+import ploidy_eval
 from data4from2and3 import (
     SC_CN_TOOLS, SC_CN_EVAL_TOOLS, SC_CN_TOOL_TO_RUN_ORDER,
     SC_CN_TOOL_DEPENDENCY_TO_DEPENDENT, ResultCN, bamfilename2samplename,
 )
+from ploidy_eval import DEFAULT_PLOIDY_WINDOW
+
+# Shared between this module's standalone parser and main.py, so the two stay in sync.
+PLOIDY_FILE_HELP = (
+    'TSV mapping sample -> expected (experimental) ploidy, with columns `sample`, `ploidy` and '
+    'an optional `aliases`. When set, each CNV caller additionally gets a ploidy-evaluation '
+    'step that compares its inferred per-cell ploidy against these values using the scAbsolute '
+    'metrics (percentage of cells outside the ploidy window, and mean absolute ploidy '
+    'distance). See ploidy.PRJNA629885.tsv for the Minussi et al. 2021 ACT dataset.')
+PLOIDY_WINDOW_HELP = (
+    'Half-width of the experimental ploidy window used by --ploidy-file; a cell whose inferred '
+    'ploidy falls outside expected +/- this value counts as an outlier (scAbsolute uses 0.5).')
+PLOIDY_CHROMS_HELP = (
+    'Chromosomes over which the observed ploidy (mean absolute copy number) is computed.')
 # Path templates for the tumor-mode files we add. We keep them under data1to2dir/<donor>
 # (the same place data2from1 already writes its alignment outputs) so the rest of the
 # pipeline can pick them up without changing the directory layout.
@@ -32,6 +60,10 @@ t_tumor_dedupbam = '<data1to2dir>/<donor>/2from1_2_<donor>.datdir/2_<donor>_2fro
 t_clmap_logdir = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/'
 t_clmap_script = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_tumor_clustermap.sh'
 t_clmap_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_clustermap'
+# Ploidy evaluation lives in the same logdir/datdir as the clustermap step, so that enabling
+# --ploidy-file does not change the directory layout for anything that already exists.
+t_ploidy_script = '<data2to4dir>/<donor>/2into4_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>.logdir/2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_tumor_ploidy_eval.sh'
+t_ploidy_prefix = '<data2to4dir>/<donor>/4from2_2_<donor>_3_<sampleType>_<avgSpotLen>_4_step<tool_order>_<tool>_ploidy_eval'
 def _fqs_to_df(args, metadata_tsv):
     samples = {}
     for fq in args.fqs:
@@ -151,10 +183,12 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 'tool_ord_2': str(SC_CN_TOOL_TO_RUN_ORDER[tool] + 2),
                 'data2to4dir': data2to4dir,
             }
-            (logdir, script, script2, tmpdir, datdir, clmap_logdir, clmap_script, clmap_prefix
+            (logdir, script, script2, tmpdir, datdir, clmap_logdir, clmap_script, clmap_prefix,
+             ploidy_script, ploidy_prefix
              ) = find_replace_all(
                 [cm.t2into4logdir, cm.t2into4script, cm.t2into4scrip2, cm.t2into4tmpdir,
-                 cm.t4from2datdir, t_clmap_logdir, t_clmap_script, t_clmap_prefix],
+                 cm.t4from2datdir, t_clmap_logdir, t_clmap_script, t_clmap_prefix,
+                 t_ploidy_script, t_ploidy_prefix],
                 infodict)
             cm.makedirs((logdir, tmpdir, datdir, clmap_logdir))
             # Build the inbam2call mapping for this group: tumor BAMs go in, per-cell CNV
@@ -201,6 +235,30 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_DSA_{donor}_{sampleType}_{avgSpotLen}.rule'))
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_tool_{tool}.rule'))
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_all.rule'))
+            # Ploidy evaluation against the experimental (e.g. FACS/DAPI) ploidy, using the
+            # scAbsolute metrics. Only integer CN calls carry an absolute scale, so this reads
+            # the *intcns.bed files and never the relative *depcns.bed ones.
+            ploidy_file = getattr(args, 'ploidy_file', None)
+            if tool in SC_CN_EVAL_TOOLS and ploidy_file:
+                bed_glob = F'{datdir}*intcns.bed'
+                title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
+                metadata_arg = (F'--metadata-tsv "{os.path.abspath(args.SraRunTable)}" '
+                                if getattr(args, 'SraRunTable', None) else '')
+                with cm.myopen(ploidy_script, args.writing_mode) as pf:
+                    cmd = (F'python {root}/copy-num-bench-scwgs/ploidy_eval.py '
+                           F'-i {bed_glob} -o {ploidy_prefix} '
+                           F'--ploidy-file "{os.path.abspath(ploidy_file)}" '
+                           F'{metadata_arg}'
+                           F'--ploidy-window {getattr(args, "ploidy_window", 0.5)} '
+                           F'--chroms {getattr(args, "ploidy_chroms", "autosomes")} '
+                           F'--tool {tool} --donor {donor} --sample-type {sampleType} '
+                           F'--avg-spot-len {avgSpotLen} --plot --title "{title}" '
+                           F'#sequential=ploidy_eval.{tool}/')
+                    write2file(cmd, pf, ploidy_script)
+                deps.append((script2, ploidy_script))
+                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_DSA_{donor}_{sampleType}_{avgSpotLen}.rule'))
+                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_tool_{tool}.rule'))
+                deps.append((ploidy_script, F'data4from2and3_4_ploidy_eval_all.rule'))
     return deps
 def main(args1=None):
     """Entry point used by main.py when --tumor-fastq is set."""
@@ -225,12 +283,26 @@ def main(args1=None):
         parser.add_argument('--infer-library-layout', action='store_true')
         parser.add_argument('--phased-vcf', default=phased_vcf)
         parser.add_argument('--tumor-datdir', default=os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data'])))
+        parser.add_argument('--ploidy-file', default=None, help=PLOIDY_FILE_HELP)
+        parser.add_argument('--ploidy-window', type=float, default=DEFAULT_PLOIDY_WINDOW, help=PLOIDY_WINDOW_HELP)
+        parser.add_argument('--ploidy-chroms', choices=['autosomes', 'all'], default='autosomes', help=PLOIDY_CHROMS_HELP)
         args = parser.parse_args()
     else:
         args = args1
         if not hasattr(args, 'phased_vcf') or not args.phased_vcf:
             logging.info(f"Setting phased_vcf={phased_vcf} by default.")
             args.phased_vcf = phased_vcf
+
+    ploidy_file = getattr(args, 'ploidy_file', None)
+    if ploidy_file:
+        if not os.path.isfile(ploidy_file):
+            raise ValueError(F'--ploidy-file does not exist: {ploidy_file}')
+        # Parse it now rather than at snakemake run time: a typo in the ploidy file should
+        # fail while generating the workflow, not after the callers have already run.
+        args.ploidy_file = os.path.abspath(ploidy_file)
+        table = ploidy_eval.load_ploidy_table(args.ploidy_file)
+        logging.info('Using ploidy file %s with %d samples: %s',
+                     args.ploidy_file, len(table), sorted(table.sample2ploidy))
 
     # datadir = args.tumor_datdir # os.path.abspath(os.path.sep.join([script_dir, '..', 'real_tumor_data']))
     data0to1dir, data1to2dir, data2to3dir, data2to4dir, data3to4dir, data4to5dir = cm.get_varnames(args.tumor_datdir)
