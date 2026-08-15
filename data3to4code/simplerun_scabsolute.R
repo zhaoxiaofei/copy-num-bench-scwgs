@@ -57,7 +57,7 @@ nthreads    <- suppressWarnings(as.integer(opt(6, NA)))
 doCellcycle <- flag(7)                                   # S-phase tests a ploidy benchmark drops
 splitChr    <- flag(8)                                   # see the speed note above
 
-PKGS <- c("reticulate", "future.apply", "QDNAseq", "Biobase", "BiocGenerics", "GenomicRanges",
+PKGS <- c("reticulate", "QDNAseq", "Biobase", "BiocGenerics", "GenomicRanges",
           "Rsamtools", "dplyr", "readr", "digest", "IRanges", "MASS", "robustbase", "S4Vectors",
           "matrixStats", "ggplot2")
 SRC  <- c("data/changepoint/wrap_PELT.R", "R/scSegment.R", "R/scAbsolute.R", "R/core.R",
@@ -224,8 +224,8 @@ output_tsv <- file.path(out_dir, basename(output_tsv))          # absolute, for 
 hmm_root   <- writable_dir(paste0(output_tsv, ".hmm_work"), "HMM work directory")   # note 7
 cell_dir   <- writable_dir(paste0(output_tsv, ".cells"), "per-cell cache directory")
 
-# future_lapply without future.seed warns once per cell about unreliable RNG values.
-options(future.rng.onMisuse = "ignore", future.globals.maxSize = 8 * 1024^3)
+# Allow the per-part QDNAseq objects to be exported to multisession workers.
+options(future.globals.maxSize = 8 * 1024^3)
 
 # parallelly refuses more workers than availableCores(), which under-reports on shared or
 # containerised hosts (it follows cgroup quotas and the scheduler's variables). An explicit
@@ -343,12 +343,26 @@ run_part <- function(part) {
     })
 }
 
-chunks <- stage("scAbsolute (all cells)",
-                future.apply::future_lapply(parts, run_part, future.seed = TRUE,
-                                            future.chunk.size = 1L))
+# Use futures directly and normalise every worker return before merging.  A dropped cell may
+# surface as NULL at this boundary; it is a per-cell failure, not a reason to abort the whole run.
+chunks <- stage("scAbsolute (all cells)", {
+    fs <- lapply(parts, function(part) future::future(run_part(part), seed = TRUE))
+    Map(function(f, part) {
+        x <- tryCatch(future::value(f),
+                      error = function(e) fail(paste0("worker failed: ", conditionMessage(e))))
+        if (inherits(x, "scAbsoluteFailure")) return(rep(list(x), length(part$cells)))
+        if (!is.list(x) || length(x) != length(part$cells))
+            return(rep(list(fail(sprintf("worker returned %d result(s) for %d cell(s)",
+                                         length(x), length(part$cells)))), length(part$cells)))
+        Map(function(y, cell) as_result(y, paste0("worker returned no object for ", cell)),
+            x, part$cells)
+    }, fs, parts)
+})
 
 results <- vector("list", length(cells))      # back into BAM order, whatever the chunking was
 for (k in seq_along(parts)) results[parts[[k]]$ix] <- chunks[[k]]
+results <- Map(function(x, cell) as_result(x, paste0("no result collected for ", cell)),
+               results, cells)
 
 
 ## 3. Collect the per-cell ploidy calls ----------------------------------------------------------
@@ -357,6 +371,7 @@ for (k in seq_along(parts)) results[parts[[k]]$ix] <- chunks[[k]]
 field <- function(pd, name, cast) if (name %in% colnames(pd)) cast(pd[[name]][1]) else cast(NA)
 
 row_of <- function(res, cell) {
+    res <- as_result(res, paste0("no result available for ", cell))
     if (inherits(res, "scAbsoluteFailure"))
         return(data.frame(cell = cell, ploidy = NA_real_, rpc = NA_real_, used_reads = NA_real_,
                           failure_reason = one_line(paste0("error: ", res$message)),

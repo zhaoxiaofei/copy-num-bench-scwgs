@@ -45,7 +45,10 @@ def main():
         help=data_tumor.PLOIDY_WINDOW_HELP)
     parser.add_argument('--ploidy-chroms', choices=['autosomes', 'all'], default='autosomes',
         help=data_tumor.PLOIDY_CHROMS_HELP)
-    parser.add_argument('--ploidy-tools', nargs='*', default=[], choices=ploidy_tools.TOOLS,
+    # No argparse `choices`: gink_custom_binning.py generates Ginkgo passes whose names are not
+    # known until --binnings has been read, and those report a ploidy like any other Ginkgo run.
+    # ploidy_tools.setup() validates the names instead, and its error reaches parser.error below.
+    parser.add_argument('--ploidy-tools', nargs='*', default=[], metavar='TOOL',
         help=ploidy_tools.PLOIDY_TOOLS_HELP)
     parser.add_argument('--ploidy-facs', action='store_true', help=ploidy_tools.PLOIDY_FACS_HELP)
 
