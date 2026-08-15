@@ -301,10 +301,11 @@ rule {dst_task}:
     for dst_rulename in sorted(rule_to_srcs_dict.keys()):
         dst_task = script2task(dst_rulename)
         src_scripts = sorted(list(rule_to_srcs_dict[dst_rulename]))
+        src_scripts = [repr(str(x)) for x in src_scripts]
         rule = F'''
 # 3. End
 rule {dst_task}:
-    input: "{', '.join(src_scripts)}"'''
+    input: {', '.join(src_scripts)}'''
         rules.append(rule)
 
     rule_all = F'''
