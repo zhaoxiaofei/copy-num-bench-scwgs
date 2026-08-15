@@ -5,11 +5,9 @@
 Compare the observed per-cell ploidy (inferred by a benchmarked scWGS CNV caller) against the
 expected per-cell ploidy (an orthogonal experimental estimate, e.g. FACS/DAPI or karyotype)
 supplied through a ploidy file, using the evaluation metrics defined by scAbsolute:
-
     Schneider MP, Cullen AE, Pangonyte J, et al.
     "scAbsolute: measuring single-cell ploidy and replication status."
     Genome Biology 2024;25:62.  https://doi.org/10.1186/s13059-024-03204-y
-
 Definitions taken from that paper
 --------------------------------
 * Ploidy (their Eq. 1) is the mean absolute copy number over the genomic bins of a cell,
@@ -19,12 +17,10 @@ Definitions taken from that paper
   direct generalisation is the segment-length-weighted mean copy number (identical to Eq. 1
   when the segments are the caller's fixed-size bins).  `--weight segment` gives the
   unweighted per-segment mean instead.
-
 * Primary metric 1 -- percentage of ploidy outliers.  scAbsolute assess "the percentage of
   cells outside an experimental ploidy window of +/- 0.5 around the peak of the DAPI
   distribution"; the window absorbs segmentation and FACS uncertainty while still excluding
   genuine ploidy changes.  Reported here as `pct_outliers` (window size is `--ploidy-window`).
-
 * Primary metric 2 -- mean absolute ploidy distance.  "the mean absolute distance across all
   cells in a sample from the experimental ploidy estimate".  Reported as
   `mean_abs_ploidy_distance`.  In scAbsolute's Table 1 this is the value in parentheses.
@@ -32,21 +28,18 @@ Definitions taken from that paper
 * Table 1 aggregate -- "the mean % of outliers across all samples per method", i.e. the
   unweighted mean of `pct_outliers` over samples.  Reported in the ALL row as
   `mean_pct_outliers_across_samples` (the cell-weighted pooled value is also given).
-
 * Auxiliary diagnostics (from the Fig. 4 annotation, where "blue asterisks indicate ploidy
   levels of 1/2 or 2 times the experimental ploidy estimate"): the fraction of cells that
   land within the same +/- window around 2 x p_exp or 0.5 x p_exp.  These are the
   characteristic non-identifiability failures (whole-genome-doubling / G2 confusion and
   halving), and separating them from unstructured error is what makes the outlier rate
   interpretable.  Reported as `pct_near_2x`, `pct_near_half`, `pct_scaling_error`.
-
 * Copy-number cap (`--max-cn`).  A ploidy is a genome-wide mean, so a few focal high-level
   amplifications can move it by more than the whole evaluation window.  Capping each segment
   at `--max-cn` (default 10) keeps such segments counted but bounded; `--max-cn inf` averages
   the copy numbers exactly as the caller reported them.  The two settings answer different
   questions -- how well the caller places the bulk of the genome, versus what its raw output
   literally implies -- so the pipeline runs both and writes them to separate output prefixes.
-
 Usage
 -----
     python ploidy_eval.py \
@@ -58,7 +51,6 @@ Usage
 
 Outputs `<prefix>_percell.tsv`, `<prefix>_persample.tsv`, `<prefix>_summary.json` and, with
 `--plot`, `<prefix>.pdf` / `<prefix>.png` in the style of scAbsolute Fig. 4.
-
 This module is also importable: `load_ploidy_table`, `bed_to_ploidy`, `per_cell_metrics` and
 `summarize_by_sample` are the pieces reused by data_tumor.py.
 """
@@ -66,7 +58,6 @@ import argparse, collections, glob, json, logging, os, re, sys
 
 import numpy as np
 import pandas as pd
-
 # ---------------------------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------------------------
@@ -77,7 +68,6 @@ ALL_CHROMS = AUTOSOMES + SEX_CHROMS
 
 # scAbsolute's window around the experimental point estimate (their Table 1 / Fig. 4).
 DEFAULT_PLOIDY_WINDOW = 0.5
-
 # Cap applied to the per-segment copy number before it is averaged into a ploidy. Ploidy is a
 # genome-wide mean, so without a cap a few focal high-level amplifications (which some callers
 # report as CN in the hundreds) move it by more than the whole +/- 0.5 window; with a cap the
@@ -86,11 +76,9 @@ DEFAULT_PLOIDY_WINDOW = 0.5
 DEFAULT_MAX_CN = 10.0
 UNCAPPED_MAX_CN_ALIASES = ('inf', 'infinity', 'none', 'no', 'nan', '')
 
-
 def is_uncapped(max_cn):
     """True when `max_cn` asks for the copy numbers to be averaged exactly as they were called."""
     return max_cn is None or not np.isfinite(float(max_cn))
-
 
 def parse_max_cn(value):
     """--max-cn: a number, or any of `inf`/`none` to leave the copy numbers uncapped."""
@@ -102,7 +90,6 @@ def parse_max_cn(value):
     if not (max_cn > 0):
         raise ValueError(F'--max-cn {value} must be positive')
     return max_cn
-
 # Columns of an SraRunTable that may carry a human-readable sample label, most specific first.
 # `TN2_S6_C359`-style library names collapse to `TN2` through the prefix backoff in
 # PloidyTable.lookup(), so listing the per-cell columns first costs nothing.
@@ -114,7 +101,6 @@ DEFAULT_SAMPLE_KEY_COLUMNS = [
 ]
 RUN_COLUMNS = ['#Run', 'Run', 'run_accession', 'Run~accession']
 RUN_ACCESSION_RE = re.compile(r'((?:[SED]RR|SAMN|GSM)\d+)')
-
 # ---------------------------------------------------------------------------------------------
 # Ploidy file
 # ---------------------------------------------------------------------------------------------
@@ -122,13 +108,10 @@ RUN_ACCESSION_RE = re.compile(r'((?:[SED]RR|SAMN|GSM)\d+)')
 
 def _norm_key(name):
     """Fold the many spellings of one sample id onto a single key.
-
     `MDA-MB-231`, `MDA_MB_231`, `MDAMB231` and `mdamb231` all become `mdamb231`, which is what
     lets one ploidy file serve run tables that were curated by different people.
     """
     return re.sub(r'[^a-z0-9]', '', str(name).strip().lower())
-
-
 # On simulated data the ground truth is not a per-sample number from the literature but the
 # simulator's own CN profile for each individual cell, written next to the simulated BAM by
 # data3from2.py. Reading the expected ploidy out of those BEDs with bed_to_ploidy() -- the same
@@ -136,13 +119,58 @@ def _norm_key(name):
 # exactly the same footing, including the --chroms and --max-cn conventions.
 TRUTH_BED_SUFFIX = '_simtruth.bed'
 
+GRCH37_AUTOSOME_LENGTHS = [249250621,243199373,198022430,191154276,180915260,171115067,159138663,146364022,141213431,135534747,135006516,133851895,115169878,107349540,102531392,90354753,81195210,78077248,59128983,63025520,48129895,51304566]
+
+def truth_bed_to_ploidy(path, chroms=None, weight='length', max_cn=DEFAULT_MAX_CN):
+    header = None
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip('\n')
+            if not line:
+                continue
+            if line.startswith('#'):
+                header = line.lstrip('#').split('\t')
+                continue
+            toks = line.split('\t')
+            if len(toks) < 4:
+                continue
+            try:
+                names = [re.sub(r'[^a-z0-9]', '', x.lower()) for x in header] if header else []
+                if 'cn' in names:
+                    cn = float(toks[names.index('cn')])
+                elif 'majorcn' in names and 'minorcn' in names:
+                    cn = float(toks[names.index('majorcn')]) + float(toks[names.index('minorcn')])
+                elif 'totalcn' in names:
+                    cn = float(toks[names.index('totalcn')])
+                else:
+                    cn = float(toks[3])
+                rows.append((toks[0], int(round(float(toks[1]))), int(round(float(toks[2]))), cn))
+            except (ValueError, IndexError):
+                continue
+    df = pd.DataFrame(rows, columns=['chrom', 'start', 'end', 'cn'])
+    if header and 'CN' in header and 'totalCN' in header:
+        for chrom, idx in df.groupby('chrom', sort=False).groups.items():
+            m = re.fullmatch(r'chr(\d+)', str(chrom))
+            if not m or not 1 <= int(m.group(1)) <= 22:
+                continue
+            idx = list(idx)
+            starts = df.loc[idx, 'start'].to_numpy(dtype=int)
+            ends = df.loc[idx, 'end'].to_numpy(dtype=int)
+            chrlen = GRCH37_AUTOSOME_LENGTHS[int(m.group(1))-1]
+            df.loc[idx, 'start'] = [0 if i == 0 else (ends[i-1] + starts[i]) // 2 for i in range(len(idx))]
+            df.loc[idx, 'end'] = [chrlen if i == len(idx)-1 else (starts[i+1] + ends[i]) // 2 for i in range(len(idx))]
+    return bed_to_ploidy(df, chroms=chroms, weight=weight, max_cn=max_cn)
 
 def load_truth_ploidies(patterns, chroms=None, weight='length', max_cn=DEFAULT_MAX_CN,
                         suffix=TRUTH_BED_SUFFIX):
     """{simulated cell name -> expected ploidy}, from the simulator's per-cell truth BEDs."""
     files = []
     for pat in patterns:
-        files.extend(sorted(glob.glob(pat)) if any(c in pat for c in '*?[') else [pat])
+        matched = sorted(glob.glob(pat)) if any(c in pat for c in '*?[') else [pat]
+        for path in matched:
+            logging.info('truth BED matched path: %s', os.path.abspath(path))
+        files.extend(matched)
     truth = {}
     for path in files:
         if not (os.path.isfile(path) and os.path.getsize(path)):
@@ -151,13 +179,11 @@ def load_truth_ploidies(patterns, chroms=None, weight='length', max_cn=DEFAULT_M
         # The suffix already ends in `.bed`, so it must be removed in one step, not on top of a
         # separate extension strip.
         cell = base[:-len(suffix)] if base.endswith(suffix) else re.sub(r'\.bed$', '', base)
-        truth[cell] = bed_to_ploidy(path, chroms=chroms, weight=weight, max_cn=max_cn)[0]
+        truth[cell] = truth_bed_to_ploidy(path, chroms=chroms, weight=weight, max_cn=max_cn)[0]
     return truth
-
 
 def truth_lookup(cell, truth):
     """The truth entry belonging to one called cell, or None.
-
     A caller names its per-cell BED `<caller tags>_4from3_<simulated cell>_intcns.bed` while a
     ploidy-inference tool reports the simulated cell name itself, so a suffix match resolves
     both. Longest key first, because simulated cell names share long prefixes.
@@ -166,7 +192,6 @@ def truth_lookup(cell, truth):
     if stem in truth:
         return stem
     return next((k for k in sorted(truth, key=len, reverse=True) if stem.endswith(k)), None)
-
 
 class PloidyTable:
     """sample -> expected ploidy, with tolerant name resolution.
@@ -177,7 +202,6 @@ class PloidyTable:
       3. token-prefix backoff: `TN2_S6_C359` -> `TN2_S6` -> `TN2`
       4. token-bounded substring, longest key first (so `MDA-MB-231-EX1` beats `MDA-MB-231`)
     """
-
     def __init__(self, records):
         self.records = list(records)                 # list of dict rows, in file order
         self.key2sample = {}                         # normalised key -> canonical sample id
@@ -205,7 +229,6 @@ class PloidyTable:
                 self.key2sample[nkey] = sample
         # Longest keys first so that the substring pass prefers the most specific sample.
         self._keys_by_len = sorted(self.key2sample, key=len, reverse=True)
-
     def __len__(self):
         return len(self.sample2ploidy)
 
@@ -214,7 +237,6 @@ class PloidyTable:
 
     def ploidy_of(self, sample):
         return self.sample2ploidy[sample]
-
     def _resolve_one(self, candidate):
         if candidate is None:
             return None
@@ -235,10 +257,10 @@ class PloidyTable:
                 return self.key2sample[sub]
         # Token-bounded substring, longest key first.
         for key in self._keys_by_len:
-            if len(key) >= 3 and key in nkey:
+            if len(key) >= 3 and any(_norm_key(''.join(tokens[i:j])) == key
+                                     for i in range(len(tokens)) for j in range(i + 1, len(tokens) + 1)):
                 return self.key2sample[key]
         return None
-
     def lookup(self, candidates):
         """Return (sample_id, expected_ploidy, matched_candidate) or (None, None, None)."""
         for cand in candidates:
@@ -250,7 +272,6 @@ class PloidyTable:
 
 def load_ploidy_table(path):
     """Read a ploidy TSV.
-
     Required columns: `sample` and `ploidy` (a `#` in front of the header is tolerated, as is a
     headerless two-column file).  Optional `aliases` holds `|`-separated alternative spellings;
     an alias of the form `re:<regex>` is matched as a regular expression.  Lines starting with
@@ -291,12 +312,9 @@ def load_ploidy_table(path):
     if not rows:
         raise ValueError(F'{path}: no ploidy records found')
     return PloidyTable(rows)
-
-
 # ---------------------------------------------------------------------------------------------
 # Observed ploidy from per-cell CNV BED files
 # ---------------------------------------------------------------------------------------------
-
 
 def load_bed(path):
     """Read a 4-column (chrom, start, end, copy-number) BED; malformed lines are skipped."""
@@ -316,7 +334,6 @@ def load_bed(path):
                 continue
     return pd.DataFrame(rows, columns=['chrom', 'start', 'end', 'cn'])
 
-
 def _norm_chrom(chrom):
     c = str(chrom).strip()
     return c if c.lower().startswith('chr') else F'chr{c}'
@@ -324,7 +341,6 @@ def _norm_chrom(chrom):
 
 def bed_to_ploidy(path_or_df, chroms=None, weight='length', max_cn=10):
     """Observed ploidy of one cell = mean absolute copy number (scAbsolute Eq. 1).
-
     Returns (ploidy, covered_bases, n_segments); ploidy is NaN when nothing is usable.
     `chroms` restricts the calculation (default: autosomes -- sex-chromosome calls are the
     least reliable output of every caller and scAbsolute likewise excludes them when reasoning
@@ -352,12 +368,9 @@ def bed_to_ploidy(path_or_df, chroms=None, weight='length', max_cn=10):
         return float('nan'), 0, int(len(df))
     cn_series = df['cn'] if is_uncapped(max_cn) else df['cn'].clip(upper=float(max_cn))
     return float((cn_series * w).sum() / total), int(lengths.sum()), int(len(df))
-
-
 # ---------------------------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------------------------
-
 
 def per_cell_metrics(observed, expected, window=DEFAULT_PLOIDY_WINDOW):
     """scAbsolute per-cell quantities for one cell."""
@@ -374,14 +387,12 @@ def per_cell_metrics(observed, expected, window=DEFAULT_PLOIDY_WINDOW):
         'near_half': bool(abs(observed - 0.5 * expected) <= window),
     }
 
-
 def _pct(mask):
     return float(100.0 * np.mean(mask)) if len(mask) else float('nan')
 
 
 def summarize_by_sample(percell_df, window=DEFAULT_PLOIDY_WINDOW):
     """Per-sample table in the layout of scAbsolute Table 1, plus an ALL row.
-
     The ALL row carries both `mean_pct_outliers_across_samples` (scAbsolute's own last row:
     an unweighted mean over samples, so a 40-cell sample counts as much as a 1300-cell one)
     and the cell-weighted pooled figures.
@@ -396,7 +407,7 @@ def summarize_by_sample(percell_df, window=DEFAULT_PLOIDY_WINDOW):
         rows.append({
             'sample': sample,
             'n_cells': int(len(ok)),
-            'expected_ploidy': float(ok['expected_ploidy'].iloc[0]),
+            'expected_ploidy': float(np.mean(ok['expected_ploidy'])),
             # --- scAbsolute primary metrics ---
             'pct_outliers': _pct(ok['is_outlier'].to_numpy(dtype=bool)),
             'mean_abs_ploidy_distance': float(np.mean(abs_dist)),
@@ -435,12 +446,9 @@ def summarize_by_sample(percell_df, window=DEFAULT_PLOIDY_WINDOW):
         'pooled_pct_scaling_error': _pct((ok_all['near_2x'] | ok_all['near_half']).to_numpy(dtype=bool)),
     }
     return per_sample, overall
-
-
 # ---------------------------------------------------------------------------------------------
 # Cell -> sample resolution
 # ---------------------------------------------------------------------------------------------
-
 
 def load_run_labels(metadata_tsv, key_columns=None):
     """run accession -> [candidate sample labels], most specific first."""
@@ -475,7 +483,6 @@ def load_run_labels(metadata_tsv, key_columns=None):
         out[run] = labels
     return out
 
-
 def cell_candidates(bed_path, run2labels, sample_regex=None):
     """Ordered list of labels to try when resolving one per-cell BED to a ploidy-file sample."""
     base = re.sub(r'\.bed$', '', os.path.basename(bed_path))
@@ -484,8 +491,11 @@ def cell_candidates(bed_path, run2labels, sample_regex=None):
     if sample_regex:
         m = re.search(sample_regex, base)
         if m:
+            logging.info('sample regex matched path: %s', os.path.abspath(bed_path))
             cands.append(m.group(1) if m.groups() else m.group(0))
     runs = RUN_ACCESSION_RE.findall(base)
+    if runs:
+        logging.info('run regex matched path: %s', os.path.abspath(bed_path))
     for run in runs:
         cands.extend(run2labels.get(run, []))
         cands.append(run)
@@ -498,8 +508,6 @@ def cell_candidates(bed_path, run2labels, sample_regex=None):
             out.append(c)
     return out, (runs[0] if runs else '')
 
-
-# ---------------------------------------------------------------------------------------------
 # Plot (scAbsolute Fig. 4 style)
 # ---------------------------------------------------------------------------------------------
 
@@ -508,7 +516,6 @@ def plot_ploidy(percell_df, per_sample_df, out_prefix, window, title=''):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-
     samples = list(per_sample_df['sample'])
     fig, ax = plt.subplots(figsize=(max(5.0, 1.35 * len(samples) + 2.0), 4.6))
     rng = np.random.default_rng(0)
@@ -534,12 +541,9 @@ def plot_ploidy(percell_df, per_sample_df, out_prefix, window, title=''):
     fig.savefig(out_prefix + '.pdf', bbox_inches='tight')
     fig.savefig(out_prefix + '.png', dpi=150, bbox_inches='tight')
     plt.close(fig)
-
-
 # ---------------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------------
-
 
 def build_parser():
     p = argparse.ArgumentParser(
@@ -587,7 +591,6 @@ def build_parser():
     p.add_argument('--avg-spot-len', default='')
     return p
 
-
 def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(pathname)s:%(lineno)d %(levelname)s - %(message)s')
@@ -595,15 +598,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not (args.ploidy_file or args.truth_bed):
         parser.error('one of --ploidy-file (experimental ploidy) or --truth-bed (simulated truth) is required')
-
     files = []
     for pat in args.input:
-        files.extend(sorted(glob.glob(pat)) if any(c in pat for c in '*?[') else [pat])
+        matched = sorted(glob.glob(pat)) if any(c in pat for c in '*?[') else [pat]
+        for path in matched:
+            logging.info('input BED matched path: %s', os.path.abspath(path))
+        files.extend(matched)
     files = [f for f in files if os.path.isfile(f) and os.path.getsize(f) > 0]
     if not files:
         sys.stderr.write('ploidy_eval: no usable input BED files.\n')
         return 1
-
     chroms = AUTOSOMES if args.chroms == 'autosomes' else ALL_CHROMS
     table = load_ploidy_table(args.ploidy_file) if args.ploidy_file else None
     truth = (load_truth_ploidies(args.truth_bed, chroms=chroms, weight=args.weight,
@@ -612,7 +616,6 @@ def main(argv=None):
     logging.info('truth: %s (%d entries); metadata: %d runs; %d BED files',
                  (args.truth_bed if truth is not None else args.ploidy_file),
                  (len(truth) if truth is not None else len(table)), len(run2labels), len(files))
-
     records, unresolved = [], []
     for path in files:
         cands, run = cell_candidates(path, run2labels, args.sample_regex or None)
@@ -639,7 +642,6 @@ def main(argv=None):
             if v:
                 rec[k] = v
         records.append(rec)
-
     if unresolved:
         logging.warning('%d/%d cells could not be matched to a ploidy-file sample; '
                         'first unmatched labels: %s', len(unresolved), len(files),
@@ -651,7 +653,6 @@ def main(argv=None):
     if not records:
         sys.stderr.write('ploidy_eval: no cell could be matched to the ploidy file.\n')
         return 1
-
     percell = pd.DataFrame(records)
     per_sample, overall = summarize_by_sample(percell, args.ploidy_window)
     overall.update({'n_cells_unresolved': len(unresolved), 'n_bed_files': len(files),
@@ -663,7 +664,6 @@ def main(argv=None):
                     'max_cn': ('inf' if is_uncapped(args.max_cn) else float(args.max_cn)),
                     'tool': args.tool, 'donor': args.donor,
                     'sampleType': args.sample_type, 'avgSpotLen': args.avg_spot_len})
-
     out_dir = os.path.dirname(os.path.abspath(args.output_prefix))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -674,7 +674,6 @@ def main(argv=None):
         json.dump(overall, fh, indent=2, sort_keys=True)
     if args.plot:
         plot_ploidy(percell, per_sample, args.output_prefix, args.ploidy_window, args.title)
-
     sys.stderr.write(per_sample.to_string(index=False) + '\n')
     sys.stderr.write(F'mean %outliers across samples = '
                      F'{overall["mean_pct_outliers_across_samples"]:.1f}; '
