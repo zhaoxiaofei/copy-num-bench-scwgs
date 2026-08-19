@@ -268,7 +268,7 @@ def _run_cmd(tool, rootdir, indir, calls):
         rscript = F'{rootdir}/copy-num-bench-scwgs/data3to4code/simplerun_scabsolute.R'
         basedir = os.getenv('scAbsoluteRoot', F'{rootdir}/copy-num-bench-scwgs/data3to4code/scAbsolute')
         return (F'time -p conda run -n scabsolute Rscript {rscript} '
-                F'{indir} {calls} {basedir} {_CFG["bin_size"]} {_CFG["genome"]}')
+                F'{indir} {calls} {basedir} {_CFG["bin_size"]} {_CFG["genome"]} {8*8}')
     raise ValueError(F'No run command is defined for the ploidy-inference tool {tool}')
 
 def _gen_ploidy_tool(infodict, tool, params):
@@ -309,6 +309,7 @@ def _gen_ploidy_tool(infodict, tool, params):
             cmd += F' && python {rootdir}/copy-num-bench-scwgs/ploidy_tools.py facs -i {calls} -o {facs}'
         cmd += F' #sequential=run.{tool}/'
         cmds, deps = [cmd], []
+        deps = [(params['start_script'], script, ['threads: 8'])]
     scripts = [(script, cmd)] if not caller else []
     if not _CFG.get('simulated'):
         metadata_arg = (F'--metadata-tsv "{_CFG["metadata_tsv"]}" ' if _CFG.get('metadata_tsv') else '')
