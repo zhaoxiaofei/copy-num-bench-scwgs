@@ -32,6 +32,7 @@ import glob
 import os
 import re
 import sys
+sys.setrecursionlimit(20000)
 import time
 from typing import Dict, Iterable, List, Sequence, Tuple
 
