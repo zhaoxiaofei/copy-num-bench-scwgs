@@ -171,54 +171,65 @@ cat("Generated", nrow(bed_df), "bins\n")
 # -----------------------------
 multicov_out <- paste0(output_csv, ".cov.tmp")
 
-cmd_multicov <- c(
-    "multicov",
-    "-bams", bam_files,
-    "-bed", bed_file
-    # "-o", multicov_out
-)
+# R's system2 builds one shell command, and Linux caps a single argument at
+# ~128 KB, so passing hundreds of BAMs at once fails with
+# "Argument list too long". Run bedtools multicov in fixed-size chunks.
+chunk_size <- 200L
+n_chunks <- ceiling(length(bam_files) / chunk_size)
+count_parts <- vector("list", n_chunks)
 
-cat("Running: bedtools", paste(cmd_multicov, collapse = " "), "\n")
+for (ci in seq_len(n_chunks)) {
+    lo <- (ci - 1L) * chunk_size + 1L
+    hi <- min(ci * chunk_size, length(bam_files))
+    chunk_bams <- bam_files[lo:hi]
+    chunk_out <- paste0(multicov_out, ".part", ci)
 
-# --- FIX 2: Run bedtools and check exit status ---
-multicov_status <- system2(
-    command = "bedtools",
-    args = cmd_multicov,
-    stdout = multicov_out,
-    stderr = paste0(multicov_out, '.stderr') # TRUE
-)
+    cat("Running: bedtools multicov chunk ", ci, " of ", n_chunks,
+        " (", length(chunk_bams), " BAMs)\n", sep = "")
 
-# Check if bedtools itself failed (exit code != 0)
-exit_status <- attr(multicov_status, "status")
-if (!is.null(exit_status) && exit_status != 0) {
-    stop(
-        "bedtools multicov failed (exit status ", exit_status, ")\n",
-        "bedtools stderr:\n", paste(multicov_status, collapse = "\n")
+    chunk_status <- system2(
+        command = "bedtools",
+        args = c("multicov", "-bams", chunk_bams, "-bed", bed_file),
+        stdout = chunk_out,
+        stderr = paste0(chunk_out, ".stderr")
+    )
+
+    exit_status <- attr(chunk_status, "status")
+    if (!is.null(exit_status) && exit_status != 0) {
+        stop("bedtools multicov failed for chunk ", ci,
+             " (exit status ", exit_status, "). See ", chunk_out, ".stderr")
+    }
+    if (!file.exists(chunk_out) || file.info(chunk_out)$size == 0) {
+        stop(
+            "bedtools multicov produced empty output for chunk ", ci, ". Common reasons:\n",
+            "1. BAM chromosomes (e.g., '1') don't match BED (e.g., 'chr1')\n",
+            "2. BAM files have zero mapped reads (check with 'samtools flagstat')"
+        )
+    }
+
+    count_parts[[ci]] <- read.table(
+        chunk_out,
+        header = FALSE,
+        sep = "\t",
+        stringsAsFactors = FALSE
     )
 }
 
-# --- FIX 3: Check output file ---
-if (!file.exists(multicov_out)) {
-    stop("bedtools did not create output file: ", multicov_out)
-}
-if (file.info(multicov_out)$size == 0) {
-    stop(
-        "bedtools created an empty file. Common reasons:\n",
-        "1. BAM chromosomes (e.g., '1') don't match BED (e.g., 'chr1')\n",
-        "2. BAM files have zero mapped reads (check with 'samtools flagstat')"
-    )
-}
-
-if (!file.exists(multicov_out) || file.info(multicov_out)$size == 0) {
-    stop("bedtools multicov failed or produced empty output: ", multicov_out)
+# Merge chunks on the identical first three BED columns.
+multicov <- count_parts[[1]]
+if (n_chunks > 1L) {
+    for (ci in 2:n_chunks) {
+        if (!identical(count_parts[[ci]][, 1:3], multicov[, 1:3])) {
+            stop("BED rows do not line up between multicov chunks 1 and ", ci)
+        }
+        multicov <- cbind(multicov, count_parts[[ci]][, -(1:3), drop = FALSE])
+    }
 }
 
-multicov <- read.table(
-    multicov_out,
-    header = FALSE,
-    sep = "\t",
-    stringsAsFactors = FALSE
-)
+unlink(c(
+    paste0(multicov_out, ".part", seq_len(n_chunks)),
+    paste0(multicov_out, ".part", seq_len(n_chunks), ".stderr")
+))
 
 n_bams <- length(bam_files)
 expected_cols <- 3 + n_bams
@@ -431,4 +442,3 @@ cat("FLCNA output written to:", output_csv, "\n")
 # 8. Optional cleanup
 # -----------------------------
 # unlink(c(bed_file, multicov_out, gc_out))
-
