@@ -25,7 +25,8 @@ parser1.add_argument('-o', '--output', default='scWGS-performances')
 
 args = parser1.parse_args()
 
-caller2desc = {
+# The triple-quoted string below maps each caller to its journal and publication year
+'''
     'aneufinder': 'AneuFinder  Genome Biology               2016',
     'flcna'     : 'FLCNA       Genome Research              2024',
     'chisel'    : 'Chisel      Nature Biotechnology         2021',
@@ -35,8 +36,19 @@ caller2desc = {
     'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
     'sccnv'     : 'SCCNV       Frontiers in Genetics        2020',
     'scyn'      : 'SCYN/SCOPE  Cell Systems                 2020',
+'''
+
+caller2desc = {
+    'aneufinder': 'AneuFinder',
+    'flcna'     : 'FLCNA',
+    'chisel'    : 'Chisel',
+    'copynumber': 'Copynumber',
+    'ginkgo'    : 'Ginkgo',
+    'hmmcopy'   : 'HMMcopy',
+    'secnv'     : 'SeCNV',
+    'sccnv'     : 'SCCNV',
+    'scyn'      : 'SCYN',
 }
-caller2desc = {}
 
 logscale_features = [
         'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio',
@@ -47,42 +59,42 @@ logscale_features = [
 
 CONTINUOUS_FEATURES_NAME2DESC = {
     # benchmarking-strategy-dependent
-    'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio': 'Observed (called) to expected (ground-truth) ploidy ratio. '
-            '\nThe ground-truth CNs of near-haploid cells are called by the same caller from the pre-simulated data. ',
-    'with_haploidy_assumed_gametes.obs2exp_ploidy_ratio': 'Observed (called) to expected (ground-truth) ploidy ratio. '
-            '\nThe ground-truth CNs of near-haploid cells are one-valued vectors (i.e., CN=1 everywhere in the genome). ',
-    'with_aneuploidy_aware_gametes.expected_ploidy': 'Expected (called) ploidy of the simulated sequencing data. '
-            '\nThe ground-truth CNs of near-haploid cells are called by the same caller from the pre-simulated data. ',
-    'with_haploidy_assumed_gametes.expected_ploidy': 'Expected (called) ploidy of the simulated sequencing data. '
-            '\nThe ground-truth CNs of near-haploid cells are one-valued vectors (i.e., CN=1 everywhere in the genome). ',
+    'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio': 'Ratio of the observed (called) ploidy to the expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_1). '  # [REV]
+            '\nThe ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data. ',
+    'with_haploidy_assumed_gametes.obs2exp_ploidy_ratio': 'Ratio of the observed (called) ploidy to the expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_0). '  # [REV]
+            '\nThe ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
+    'with_aneuploidy_aware_gametes.expected_ploidy': 'Expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_1). '  # [REV]
+            '\nThe ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data. ',
+    'with_haploidy_assumed_gametes.expected_ploidy': 'Expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_0). '  # [REV]
+            '\nThe ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
     # sample-dependent
-    'average_seq_depth': 'average sequencing depth',
-    'raw_total_sequences': 'total number of sequencing reads',
-    'bases_mapped_cigar': 'total number of cigar-aware bases that are mapped',
-    'reads_mapped': 'total number of sequencing reads that are mapped',
-    # simulation dependent 
-    'CNA_percent': 'percentage of copy-number alterations (CNAs) that are simulated',
+    'average_seq_depth': 'Average sequencing depth of each simulated cell',  # [REV]
+    'raw_total_sequences': 'Total number of sequenced reads of each simulated cell',  # [REV]
+    'bases_mapped_cigar': 'Total number of bases mapped to the reference genome (CIGAR-aware) for each simulated cell',  # [REV]
+    'reads_mapped': 'Total number of reads mapped to the reference genome for each simulated cell',  # [REV]
+    # simulation dependent
+    'CNA_percent': 'Percentage of the genome affected by the simulated copy-number alterations (CNAs)',  # [REV]
     # result-dependent
-    'observed_ploidy': 'observed ploidy inferred by the copy-number caller from the simulated sequencing data',
-    'bed_1_cn0_genome_size': 'number of base pairs in the genome of the first sample with CN=0 (CN: copy number)',
-    'bed_1_cn1_genome_size': 'number of base pairs in the genome of the first sample with CN=1 (CN: copy number)',
-    'bed_1_cn2plus_genome_size': 'number of base pairs in the genome of the first sample with CN>1 (CN: copy number)',
-    'bed_2_cn0_genome_size': 'number of base pairs in the genome of the second sample with CN=0 (CN: copy number)',
-    'bed_2_cn1_genome_size': 'number of base pairs in the genome of the second sample with CN=1 (CN: copy number)',
-    'bed_2_cn2plus_genome_size': 'number of base pairs in the genome of the second sample with CN>1 (CN: copy number)',
+    'observed_ploidy': 'Ploidy of each simulated cell, as observed (called) by the copy-number caller',  # [REV]
+    'bed_1_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
+    'bed_1_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
+    'bed_1_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
+    'bed_2_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
+    'bed_2_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
+    'bed_2_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
 }
 
 continuous_features = list(CONTINUOUS_FEATURES_NAME2DESC.keys())
 
 CATEGORICAL_FEATURES_NAME2DESC = {
     # sample-dependent
-    'donor': 'The human subject from which is the near-haploid cells are derived',
-    'sampleType' : 'near-haploid cell type',
-    'avgSpotLen' : 'average sequening read length' , # a few unique values
+    'donor': 'The human donor from whom the near-haploid cells were derived',  # [REV]
+    'sampleType' : 'Cell type of the near-haploid cells (e.g., sperm, polar body, or female pronucleus)',  # [REV]
+    'avgSpotLen' : 'Average spot length (i.e., sequencing read length), which depends on the single-cell sequencing technology', # a few unique values  # [REV]
     # simulation-dependent
-    'overall_ploidy' : 'either diploid or aneuploid', # diploid or aneuploid
-    'cellLine' : 'cancer cell-line to simulate',
-    'n_samples_mixed' : 'number of sequencing samples that are mixed for simulation (this is a technical detail)', # 0 or 1
+    'overall_ploidy' : 'Overall ploidy of the simulated cells, either diploid or aneuploid', # diploid or aneuploid  # [REV]
+    'cellLine' : 'Cancer cell line (e.g., COLO-829, HCC1395, or HeLa) whose copy-number profile is emulated by the simulation',  # [REV]
+    'n_samples_mixed' : 'Number of near-haploid samples merged to simulate each cell (a technical detail)', # 0 or 1  # [REV]
 }
 
 categorical_features = list(CATEGORICAL_FEATURES_NAME2DESC.keys())
@@ -102,15 +114,24 @@ the_callers = set(df['Caller'].unique())
 caller_and_its_df_iterable = df.groupby('Caller')
 
 THE_PERF_METRIC_NAME2DESC = {
-    'accuracy': 'The accuracy of observed (called) versus expected (groundtruth) integer copy numbers',
-    'PCC_intCN': 'The Pearson correlation coefficient of observed (called) versus expected (groundtruth) integer copy numbers',
-    'PCC_nonintCN': 'The Pearson correlation coefficient of observed (called) non-integer copy number versus expected (groundtruth) integer copy number',
-    'frac_cov_genome': 'The fraction of the human reference genome hg19 that is covered by the observed (called) copy-number profile. ',
-    'breakpoint_f1score': 'The F1-score of detecting copy-number changes (breakpoints), representing precision-recall tradeoff' , 
-    'breakpoint_precision': 'An observed (called) breakpoint is precise (true positive) if at least one expected (grountruth) breakpoint is within 200,000 base pairs', 
-    'breakpoint_recall': 'An expected (groundtruth) breakpoint is recalled (true positive) if at least one observed (called) breakpoint is within 200,000 base pairs',    
+    'accuracy': 'Accuracy (Acc) of the observed (called) versus expected (ground-truth)\ninteger copy numbers (CNs)',
+    'PCC_intCN': 'Pearson correlation coefficient (PCC) of the observed (called) versus expected\n(ground-truth) integer copy numbers (CNs)',
+    'PCC_nonintCN': 'Pearson correlation coefficient (PCC) of the observed (called) non-integer copy numbers\nversus the expected (ground-truth) integer copy numbers (CNs)',
+    'frac_cov_genome': 'Fraction of the human reference genome hg19 covered by the observed (called)\ncopy-number profile',
+    'breakpoint_f1score': 'F1-score of detecting copy-number changes (breakpoints), balancing breakpoint\nprecision and recall',
+    'breakpoint_precision': 'Breakpoint precision: an observed (called) breakpoint is a true positive if at least one\nexpected (ground-truth) breakpoint is within 200 kb',  # [REV]
+    'breakpoint_recall': 'Breakpoint recall: an expected (ground-truth) breakpoint is a true positive if at least one\nobserved (called) breakpoint is within 200 kb',  # [REV]
 }
 the_perf_metrics = list(THE_PERF_METRIC_NAME2DESC.keys())
+THE_PERF_METRIC_NAME2SHORT = {
+    'accuracy': 'Accuracy (Acc)',
+    'PCC_intCN': 'PCC of integer CNs',
+    'PCC_nonintCN': 'PCC of non-integer CNs',
+    'frac_cov_genome': 'Genome coverage',
+    'breakpoint_f1score': 'Breakpoint F1-score',
+    'breakpoint_precision': 'Breakpoint precision',
+    'breakpoint_recall': 'Breakpoint recall',
+}
 aneu_gametes_perf_metrics = [f'with_aneuploidy_aware_gametes.{m}' for m in the_perf_metrics]
 hapl_gametes_perf_metrics = [f'with_haploidy_assumed_gametes.{m}' for m in the_perf_metrics]
 
@@ -119,32 +140,43 @@ gamete_type_to_perf_metrics = {
     'haploidy_assumed_gametes': hapl_gametes_perf_metrics,
 }
 
+gamete_type2desc = {
+    'with_haploidy_assumed_gametes': 'Haploidy-assumed (path Hap_0): the ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome)',  # [REV]
+    'with_aneuploidy_aware_gametes': 'Aneuploidy-aware (path Hap_1): the ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data',  # [REV]
+}
+gamete_type2short = {
+    'with_haploidy_assumed_gametes': 'Haploidy-assumed (path Hap_0)',  # [REV]
+    'with_aneuploidy_aware_gametes': 'Aneuploidy-aware (path Hap_1)',  # [REV]
+}
+the_gamete_legend_title = 'Ground-truth assumption about the copy numbers (CNs) of the near-haploid cells (Fig. 1a)'  # [REV]
+
 # pivot: 'Caller'
 
 def plot_main():
-    fig1 = plt.figure(figsize=(1*7, 1*5), constrained_layout=True)
+    fig1 = plt.figure(figsize=(2*7, 1*5), constrained_layout=True)
     callers = []
     perf_names = []
     perf_vals = []
     for rowidx, perf_metric in enumerate(the_perf_metrics):
-        callers.extend(list(the_df['Caller']))
-        perf_names.extend([perf_metric] * len(the_df))
-        perf_vals.extend(list(the_df[('with_aneuploidy_aware_gametes.'+perf_metric)]))
-    df = pd.DataFrame({'Copy-number callers': callers, 'Performance metrics': perf_names, 'Performances': perf_vals})
-    plot_ret = sns.boxplot(data=df, x='Performance metrics', y='Performances', hue='Copy-number callers')
+        for gamete_type in gamete_type2desc:
+            callers.extend(list(the_df['Caller']))
+            perf_names.extend([F'{THE_PERF_METRIC_NAME2SHORT[perf_metric]}\n{gamete_type2short[gamete_type]}'] * len(the_df))  # [REV] parentheses dropped
+            perf_vals.extend(list(the_df[(gamete_type+'.'+perf_metric)]))
+    df = pd.DataFrame({'Copy-number callers': [caller2desc.get(c, c) for c in callers], 'Performance metrics': perf_names, 'Performance': perf_vals})  # [REV] 'Performances' -> 'Performance'
+    plot_ret = sns.boxplot(data=df, x='Performance metrics', y='Performance', hue='Copy-number callers')  # [REV]
     # Find the outlier artists and rasterize them
     #for artist in plot_ret.get_lines():
     #    # In matplotlib, outliers are often 'line' objects with 0 line width
-    #    if artist.get_linestyle() == 'None': 
+    #    if artist.get_linestyle() == 'None':
     #        pass #artist.set_rasterized(True)
-    #plot_ret = sns.stripplot(data=df, x='Performance metrics', y='Performances', hue='Copy-number callers', alpha=0.1, jitter=True, 
+    #plot_ret = sns.stripplot(data=df, x='Performance metrics', y='Performances', hue='Copy-number callers', alpha=0.1, jitter=True,
     #          rasterized=True)
 
     handles, labels = plot_ret.get_legend_handles_labels()
     plt.tick_params(axis='both', which='major', labelsize=10)
 
     plot_ret.set_xticklabels(plot_ret.get_xticklabels(), rotation=20, ha='right')
-    
+
     plt.savefig(args.output + '_main.pdf')
     plt.savefig(args.output + '_main.png', dpi=300)
     plt.close()
@@ -157,20 +189,24 @@ def plot_grid_main():
     callers = []
     perf_names = []
     perf_vals = []
+    scen_names = []
     for rowidx, perf_metric in enumerate(the_perf_metrics):
-        callers.extend(list(the_df['Caller']))
-        perf_names.extend([perf_metric] * len(the_df))
-        perf_vals.extend(list(the_df[('with_aneuploidy_aware_gametes.'+perf_metric)]))
-    
+        for gamete_type in gamete_type2desc:
+            callers.extend(list(the_df['Caller']))
+            perf_names.extend([perf_metric] * len(the_df))
+            scen_names.extend([gamete_type2short[gamete_type]] * len(the_df))
+            perf_vals.extend(list(the_df[(gamete_type+'.'+perf_metric)]))
+
     # Tidy dataframe
     df = pd.DataFrame({
-        'Caller': callers,
+        'Caller': [caller2desc.get(c, c) for c in callers],
         'Metric': perf_names,
+        'Scenario': scen_names,
         'Performance': perf_vals
     })
 
     # --------------------------
-    # 2. Create grid: Rows=Metrics, Cols=Callers
+    # 2. Create grid: Rows=Metrics, Cols=Callers, one boxplot per gamete scenario in each cell
     # --------------------------
     g = sns.FacetGrid(
         data=df,
@@ -182,15 +218,18 @@ def plot_grid_main():
         aspect=0.7
     )
 
-    # Plot boxplot in every grid cell
-    g.map(
+    # Plot one boxplot per ground-truth scenario in every grid cell
+    g.map_dataframe(
         sns.boxplot,
-        'Caller',
-        'Performance',
-        color='#457B9D',
+        x='Caller',
+        y='Performance',
+        hue='Scenario',
+        hue_order=list(gamete_type2short.values()),
+        palette='colorblind',
         linewidth=1.0,
         flierprops=dict(markersize=1.5, alpha=0.4)
     )
+    g.add_legend(title=the_gamete_legend_title)
 
     # --------------------------
     # 3. CRITICAL: Show REAL labels (not literals)
@@ -203,7 +242,7 @@ def plot_grid_main():
     # FIRST COLUMN ONLY: Show REAL METRIC names on Y-axis
     # --------------------------
     for ax, metric in zip(g.axes[:, 0], the_perf_metrics):
-        ax.set_ylabel(metric, fontsize=10, labelpad=8)  # REAL metric label
+        ax.set_ylabel(THE_PERF_METRIC_NAME2SHORT[metric], fontsize=10, labelpad=8)  # REAL metric label
 
     # --------------------------
     # LAST ROW ONLY: Show REAL CALLER names on X-axis
@@ -219,9 +258,9 @@ def plot_grid_main():
             label.set_rotation(25)       # Tilt at 25 degrees
             label.set_ha('right')        # Anchor at the right edge
             label.set_va('top')          # Anchor at the top edge
-    # Hide all tick marks (clean look)
+    # Hide all tick marks and the redundant per-cell tick labels (clean look)
     for ax in g.axes.flat:
-        ax.tick_params(bottom=False, left=False)
+        ax.tick_params(bottom=False, left=False, labelbottom=False)
 
     # --------------------------
     # 4. Save final figure
@@ -242,15 +281,19 @@ def plot_multirow_main():
     callers = []
     perf_names = []
     perf_vals = []
+    scen_names = []
     for rowidx, perf_metric in enumerate(the_perf_metrics):
-        callers.extend(list(the_df['Caller']))
-        perf_names.extend([perf_metric] * len(the_df))
-        perf_vals.extend(list(the_df[('with_aneuploidy_aware_gametes.'+perf_metric)]))
+        for gamete_type in gamete_type2desc:
+            callers.extend(list(the_df['Caller']))
+            perf_names.extend([perf_metric] * len(the_df))
+            scen_names.extend([gamete_type2short[gamete_type]] * len(the_df))
+            perf_vals.extend(list(the_df[(gamete_type+'.'+perf_metric)]))
 
     # Tidy dataframe
     df = pd.DataFrame({
         'Caller': [caller2desc.get(c, c) for c in callers],
         'Metric': perf_names,
+        'Scenario': scen_names,
         'Performance': perf_vals
     })
 
@@ -266,32 +309,41 @@ def plot_multirow_main():
         axes = [axes]
 
     # --------------------------
-    # 3. Plot one boxplot per metric (each row = one metric)
+    # 3. Plot one boxplot per metric (each row = one metric, hue = gamete scenario)
     # --------------------------
     for ax, metric in zip(axes, the_perf_metrics):
         # Subset data for THIS metric only
         sub_df = df[df['Metric'] == metric]
-        
-        # Plot boxplot: X = Callers, Y = Performance
+
+        # Plot boxplot: X = Callers, Y = Performance, Hue = Scenario
         sns.boxplot(
             data=sub_df,
             x='Caller',
             y='Performance',
+            hue='Scenario',
+            hue_order=list(gamete_type2short.values()),
+            palette='colorblind',
             ax=ax,
-            color='steelblue',
             linewidth=1.2,
             flierprops=dict(markersize=2, alpha=0.5)
         )
-        
+        handles, labels = ax.get_legend_handles_labels()
+        if ax.legend_ is not None: ax.legend_.remove()  # one figure-level legend below instead
+
         # --------------------------
         # Style each subplot
         # --------------------------
-        ax.set_title(metric, fontsize=12, weight='bold')  # TITLE = metric name
+        ax.set_title(THE_PERF_METRIC_NAME2DESC[metric], fontsize=12, weight='bold')  # TITLE = metric definition
         ax.set_xlabel('')                                 # No repeated x-label
         ax.tick_params(axis='x', labelsize=10, rotation=30)
         ax.tick_params(axis='y', labelsize=10)
         ax.grid(axis='y', alpha=0.3)
         ax.set_xticklabels(ax.get_xticklabels(), rotation=15, ha='right')
+
+    # --------------------------
+    # One figure-level legend for the two ground-truth scenarios
+    # --------------------------
+    fig.legend(handles, labels, title=the_gamete_legend_title, loc='outside lower right', fontsize=10, title_fontsize=10)
 
     # --------------------------
     # 4. Save final figure
@@ -302,7 +354,7 @@ def plot_multirow_main():
 
 def plot_onepage(args): # (continuous_features, categorical_features, the_perf_metrics):
     feature, page_num = args
-    if feature in logscale_features: feat_scale = 'log' 
+    if feature in logscale_features: feat_scale = 'log'
     else: feat_scale = ''
     logging.info(F'START plotting {feature} with scale={feat_scale}')
     if feature in continuous_features: assert feature not in categorical_features, F'The feature {feature} cannot be both continous and categorical'
@@ -326,25 +378,20 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
         plot_perf_max = max_perf_val + (max_perf_val - min_perf_val) * 0.05
         for colidx, (caller, caller_df) in enumerate(caller_and_its_df_iterable):
             plot_dfs = []
-            for gamete_type in ['with_haploidy_assumed_gametes', 'with_aneuploidy_aware_gametes']:
+            for gamete_type in gamete_type2desc:
                 gamete_perf_metric = gamete_type+'.'+perf_metric
                 # x: feature; y: performance metric
                 plot_df = caller_df[[feature]].copy()
                 plot_df[perf_metric] = caller_df[gamete_perf_metric]
-                # maybe_aneuploid
-                # always_haploid
-                # maybe_aneuploid: let the cells CNs be called from the original pre-simulated data; always_haploid: let the cell CNs be set to ones'
-                plot_df['gamete_type'] = (
-                        'maybe_aneuploid: Let CNs be called from the original pre-simulated data' 
-                        if gamete_type == 'with_aneuploidy_aware_gametes' else 
-                        'always_haploid: Let CNs be set to one-valued vectors')
+                plot_df['gamete_type'] = gamete_type2desc[gamete_type]
                 plot_dfs.append(plot_df)
             plot_df = pd.concat(plot_dfs).reset_index(drop=True)
             #print(plot_df)
             ax2 = fig1.add_subplot(gs[rowidx+1, colidx])
             if feature in categorical_features:
                 #plot_ret = sns.boxplot    (data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, whis=np.inf)
-                plot_df.columns = [('HS1' if x == '345HS1' else x) for x in plot_df.columns] # prevent cluttering of words for the donor categorical variable
+                if feature == 'donor':  # [REV] shorten the *values* (the old line renamed column names, so 'HS1' never rendered)
+                    plot_df[feature] = plot_df[feature].replace('345HS1', 'HS1') # prevent cluttering of words for the donor categorical variable
                 plot_ret = sns.stripplot (data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, alpha=0.125, rasterized=True)
                 handles, labels = plot_ret.get_legend_handles_labels()
             else:
@@ -366,9 +413,9 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
             if feature in continuous_features:
                 ax2.set_xlim(plot_feat_min, plot_feat_max)
             ax2.set_ylim(plot_perf_min, plot_perf_max)
-            
+
             if rowidx == 0:
-                ax2.set_title('Method\n' + caller, fontsize=20)
+                ax2.set_title('Copy-number caller\n' + caller2desc.get(caller, caller), fontsize=20)  # [REV] was 'Method\n'
 
             if rowidx == len(the_perf_metrics) - 1:
                 #ax2.set_xlabel(feature)
@@ -377,7 +424,7 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
                 ax2.set_xlabel('')
                 #ax2.set_xticklabels('')
             if colidx == 0:
-                ax2.set_ylabel(perf_metric, fontsize=16)
+                ax2.set_ylabel(THE_PERF_METRIC_NAME2SHORT[perf_metric], fontsize=16)
             else:
                 ax2.set_ylabel('')
                 ax2.set_yticklabels('')
@@ -390,14 +437,14 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
                 #grid.plot_joint(sns.scatterplot, alpha=0.25)
                 #grid.plot_joint(sns.kdeplot, level=5, alpha=0.75)
                 #grid.plot_marginals(sns.kdeplot, fill=True, alpha=0.5)
-                #handles, labels = grid.ax_joint.get_legend_handles_labels()                
+                #handles, labels = grid.ax_joint.get_legend_handles_labels()
             #labels = df['Caller'].unique()
             #plot_ret.ax_joint.legend_.remove()
-            #if the_labels: 
+            #if the_labels:
             #    assert (list(labels) == list(the_labels)), F'{labels} == {the_labels} failed for feature {feature}'
             #else: the_labels = labels
     leg = legend_ax.legend(handles, labels,
-            title='Assumptions about near-haploid cell copy numbers (CNs)'
+            title=the_gamete_legend_title
             #'\n' 'maybe_aneuploid: let the cells CNs be called from the original pre-simulated data; always_haploid: let the cell CNs be set to ones'
             , loc='center', fontsize=20, title_fontsize=20, markerscale=3,
             ncol=1 # ncol=len(labels)
@@ -408,13 +455,13 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
     #legend_ax.legend(handles, labels,
     #        title='Copy-number callers',
     #        loc='center', fontsize=12, title_fontsize=14, ncol=len(labels))
-    factor = 'Factor ' + feature + ': ' + FEATURES_NAME2DESC.get(feature, 'TODO')
+    factor = 'Factor: ' + FEATURES_NAME2DESC.get(feature, 'TODO')
     if len(factor) > 200*5:
         fig1.supxlabel(factor, fontsize=16)
     else:
         fig1.supxlabel(factor, fontsize=20)
     fig1.supylabel('Performance metrics', fontsize=24)
-    A2Z = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+    A2Z = [chr(i) for i in range(ord('a'), ord('z') + 1)]  # [REV] lowercase panel letters, matching the a-f style of Fig. 1
     sublabel_ax = fig1.add_subplot(gs[0,0])
     sublabel_ax.set_axis_off()
     sublabel_ax.set_title(A2Z[page_num], fontsize=30, ha='left', fontweight='bold')
@@ -440,4 +487,3 @@ with PdfPages(args.output + '-all.pdf') as pdf:
                 for page_num, feature_withscale in enumerate(continuous_features + categorical_features)]):
             pdf.savefig(fig1, bbox_inches='tight', dpi=75)
             plt.close(fig1)
-
