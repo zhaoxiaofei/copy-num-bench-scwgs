@@ -50,6 +50,20 @@ parser1.add_argument('--stats-alpha', type=float, default=0.05, metavar='ALPHA',
 parser1.add_argument('--stats-pair-key', default=None, metavar='COLS',
                     help='Comma-separated columns identifying one simulated cell '
                          '(default: accession_1,accession_2,cellLine,overall_ploidy,CNA_percent).')
+# [REV v2] cluster (independent-experimental-unit) options: per-cell results of the
+# same caller are correlated within (accession_1, accession_2, cellLine) groups, so
+# inference is aggregated to the cluster level by default (see stat_tests.py).
+parser1.add_argument('--stats-cluster-key', default='donor', metavar='COLS',
+                    help='Comma-separated columns defining the independent experimental '
+                         'unit (cluster) for the statistical tests. Default: '
+                         'accession_1,accession_2,cellLine (the shared haplotype BAMs + '
+                         'truth template). Recommended sensitivity analysis: '
+                         '--stats-cluster-key donor,cellLine. Pass "none" to revert to '
+                         'the naive per-cell tests that treat every cell as independent.')
+parser1.add_argument('--stats-no-cluster', action='store_true', default=False,
+                    help='Alias of --stats-cluster-key none (discouraged: '
+                         'pseudoreplication; per-cell results of the same caller are '
+                         'correlated within shared-material groups).')
 
 args = parser1.parse_args()
 
@@ -214,15 +228,27 @@ THE_FIG_TITLE = 'scWGS CNV caller performance across simulated cells, callers, a
 
 
 # --------------------------------------------------------------------------- #
-# [REV] Statistical tests                                                      #
+# [REV v2] Statistical tests (cluster-robust)                                  #
 # --------------------------------------------------------------------------- #
 # Every caller is evaluated on the SAME simulated cells, so per-cell metrics are
-# paired (blocked) by cell.  The metrics are bounded and non-normal, so the tests
-# are nonparametric and two-sided: Friedman omnibus per (scenario, metric);
-# post-hoc two-sided Wilcoxon signed-rank (reference caller vs. every other,
-# paired per cell) with Holm-Bonferroni correction; matched-pairs rank-biserial
-# and common-language effect sizes; BCa bootstrap 95% CIs of the median
-# difference; Spearman concordance of the Hap_0 vs. Hap_1 caller rankings.
+# paired (blocked) by cell: this handles the correlation ACROSS CALLERS within a
+# cell.  What a block design additionally assumes is that the BLOCKS (cells) are
+# mutually independent - i.e. that the many per-cell results produced by the SAME
+# caller are independent.  That assumption is questionable here: all cells are
+# downsamplings of the haplotype-normalized BAMs of only nine donors scored
+# against three COSMIC templates, so per-cell differences are correlated within
+# (accession_1, accession_2, cellLine) groups (and the ITH deletions are nested
+# across CNA_percent).  Treating ~1,989 cells as ~1,989 independent observations is
+# pseudoreplication: the design effect 1 + (m-1)*ICC inflates the test statistics
+# and shrinks the P values (see bench_results/test_stat_tests.py,
+# demo_independence_failure, for a measured demonstration).
+#
+# The tests therefore run at the CLUSTER level by default (per-cluster medians of
+# the per-cell differences as the units of the Wilcoxon signed-rank and exact sign
+# tests; Friedman on per-cluster caller medians; Holm on cluster-level P; cluster
+# bootstrap CIs; ICC / design-effect / effective-n diagnostics per comparison),
+# while the per-cell quantities remain in the outputs as descriptive statistics
+# and as flagged naive comparisons (pvalue_cell_naive).
 # Exact P values, effect sizes and CIs land in:
 #   <output>.stats.pairwise.tsv, <output>.stats.friedman.tsv,
 #   <output>.stats.concordance.tsv, <output>.stats.json
@@ -231,7 +257,16 @@ if args.stats:
         logging.warning('stat_tests.py not found next to this script: statistical tests skipped')
     else:
         _stats_prefix = args.output
-        logging.info('running statistical tests (reference caller: %s) ...', args.stats_reference)
+        if args.stats_no_cluster or (args.stats_cluster_key or '').strip().lower() in ('none', 'naive', 'off'):
+            _stats_cluster_key = []          # naive per-cell mode (discouraged)
+        elif args.stats_cluster_key:
+            _stats_cluster_key = [c.strip() for c in args.stats_cluster_key.split(',') if c.strip()]
+        else:
+            _stats_cluster_key = None        # module default: accession_1, accession_2, cellLine
+        logging.info('running statistical tests (reference caller: %s, cluster key: %s) ...',
+                     args.stats_reference,
+                     'none (NAIVE per-cell)' if _stats_cluster_key == []
+                     else (_stats_cluster_key or stat_tests.DEFAULT_CLUSTER_KEY))
         stat_tests.run_caller_benchmark_stats(
             the_df, _stats_prefix,
             perf_metrics=the_perf_metrics,
@@ -239,6 +274,8 @@ if args.stats:
             reference=args.stats_reference,
             all_pairs=args.stats_all_pairs,
             pair_key_cols=(args.stats_pair_key.split(',') if args.stats_pair_key else None),
+            cluster_key_cols=_stats_cluster_key,
+            cluster_agg='median',
             n_resamples=args.stats_boot,
             seed=args.stats_seed,
             alpha=args.stats_alpha)

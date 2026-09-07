@@ -27,6 +27,51 @@ python cnv_gather_results.py -i ../data/*/4from3_*.datdir/*.perf.json -o ${BENCH
 cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/scWGS-performances-eval.py -t 0 -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots
 ```
 
+### How to run the statistical tests
+
+The statistical tests are part of the evaluation commands above: `scWGS-performances-eval.py` runs them by default right after loading the long TSV, and `scWGS-ploidy-performances-eval.py` runs them after the balloon plots. `bench_results/stat_tests.py` is the shared module and also works standalone:
+
+```
+# Fig. 2 (CNV-caller benchmark): statistics on the long TSV
+cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/scWGS-performances-eval.py \
+    --stats-only -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots            # stats only, no figures
+cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/stat_tests.py \
+    -o ${BENCHMARK_RESULT_FILE_PREFIX}.stats --reference ginkgo     # same thing, standalone
+cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/stat_tests.py \
+    -o ${BENCHMARK_RESULT_FILE_PREFIX}.stats.donor --reference ginkgo \
+    --cluster-key donor,cellLine                                   # donor-level sensitivity analysis
+python bench_results/test_stat_tests.py                            # self-test + independence demo
+
+# Fig. 3 (ploidy benchmark): statistics on the balloon-plot table
+python bench_results/scWGS-ploidy-performances-eval.py -i '*_ploidy_*eval_summary.json' \
+    -o ${PLOIDY_PREFIX} --stats-reference 'ginkgo|10'
+python bench_results/stat_tests.py -i ${PLOIDY_PREFIX}_pct_within_long.tsv \
+    -o ${PLOIDY_PREFIX} --reference 'ginkgo|10'                      # standalone
+```
+
+Which tests, and why. Every caller is evaluated on the same simulated cells, so per-cell performances are paired (blocked) by cell: this pairing handles the correlation **across callers within a cell**. The metrics are bounded and non-normal, so all tests are nonparametric and two-sided (two-tailed):
+
+**Independence assumption, and what was done about it.** A block design further assumes that the **blocks themselves are mutually independent** — i.e. that the many per-cell results produced by the *same* caller are independent draws. That is not credible for this benchmark: the ~1,989 simulated cells are all downsamplings of the haplotype-normalized BAMs of only **nine donors** scored against **three COSMIC templates** (COLO-829, HCC1395, HeLa), with ITH deletions nested across CNA percentages, so per-cell results of the same caller — and the paired differences between callers — are positively correlated within `(accession_1, accession_2, cellLine)` groups (and, coarser, within donors). Treating the cells as ~1,989 independent observations is **pseudoreplication**: with intra-cluster correlation ICC and average cluster size m, the variance is inflated by the design effect `DE = 1 + (m-1)*ICC`, so a per-cell test with ~45 clusters of ~44 cells and ICC = 0.3 runs with DE ~ 14 (effective n ~ 143, not 1,989): P values come out orders of magnitude too small, Holm no longer controls the family-wise error, Kendall's W is inflated, and i.i.d. cell-level bootstrap CIs lose coverage. `python bench_results/test_stat_tests.py` ends with a measured demonstration (`demo_independence_failure`): under a true null with that exact structure, the naive per-cell Wilcoxon rejects in **~58% of runs at the nominal 5%**, while the cluster-level test stays at **~5%**.
+
+Therefore, **inference runs at the level of the independent experimental unit (the cluster)**, while per-cell quantities are kept as descriptive statistics and flagged naive comparisons:
+
+* Fig. 2 default cluster key: `accession_1,accession_2,cellLine` — the shared biological material (the two haplotype BAMs) + truth template. Note that the looser relation "shares a donor" is not transitive and cannot serve as a single key; the coarser `--cluster-key donor,cellLine` is provided as a donor-level sensitivity analysis. `--cluster-key none` reverts to the naive per-cell tests (discouraged).
+* Fig. 3: within each plot group the first usable column of `donor -> cellLine -> dataset` defines the clusters — germline-derived datasets of one donor share that donor's material; real-tumor samples (no donor metadata) are their own units. Datasets with missing donor labels collapse into one shared `(missing)` cluster (the conservative choice).
+
+Tests and outputs (all two-sided):
+
+* **Omnibus, per (ground-truth scenario, metric):** Friedman test across the k callers on **per-cluster caller medians** (rows `level = cluster` in `*.stats.friedman.tsv`), with the per-cell Friedman kept as a flagged naive row (`level = cell (naive)`); Kendall's W and per-caller mean ranks at both levels.
+* **Post-hoc pairwise:** two-sided Wilcoxon signed-rank tests on the **per-cluster medians of the paired differences** (reference caller vs. every other; `--stats-all-pairs` for all 36 pairs), plus the exact two-sided sign test (`pvalue_sign_test`) as an anchor for very small cluster counts; Holm-Bonferroni correction within each (scenario, metric) family applied to the cluster-level P values. For the ploidy benchmark the same tests pair the per-sample percentage of cells within the window by dataset, within each plot group (COLO-829 / HCC1395 / HeLa / ACT), aggregated to the chosen cluster level.
+* **Effect sizes:** cluster-level matched-pairs rank-biserial correlation r (positive = reference better), paired common-language effect size P(ref > other) + 0.5 P(tie) on the cell population, and the median per-cell difference with a **cluster bootstrap 95% CI** (clusters resampled with replacement, all cells of a drawn cluster kept together; 10,000 resamples requested by default, capped at 5,000 for runtime; seeded, so all intervals are exactly reproducible).
+* **Diagnostics of the independence assumption, per comparison** (`*.stats.pairwise.tsv`): `icc_within_cluster_d` (ICC(1,1) of the paired differences within clusters, one-way ANOVA method of moments), `design_effect` = 1 + (m0-1)*max(ICC, 0), `n_effective_cells` = n/DE, and `p_inflation_ratio` = cluster-level P / naive per-cell P (1 = no dependence detected; large = the naive P overstates significance). The naive per-cell P value itself is kept in `pvalue_cell_naive` for comparison.
+* **Hap_0 vs. Hap_1 agreement (the CNP/aneuploidy fix):** Spearman's rho between the per-caller median-performance rankings under the two ground-truth scenarios (`*.stats.concordance.tsv`), plus two-sided Wilcoxon signed-rank tests of the within-caller scenario difference at the cluster level (rows with `caller_b = '<scenario>'` in `*.stats.pairwise.tsv`, Holm-corrected within each metric family).
+* `stat_tests.mcnemar_exact()` is provided for per-cell paired binary outcomes (e.g. within/outside the ploidy window for two tools evaluated on the same cells) — aggregate per cluster or restrict to one dataset before using it, since it too assumes independent cells.
+
+Exact two-sided P values, effect sizes and confidence intervals are reported in full in `*.stats.pairwise.tsv` (columns `pvalue_two_sided`, `pvalue_sign_test`, `pvalue_holm`, `rank_biserial_r`, `cl_effect_paired`, `ci95_median_diff_low/high`, `icc_within_cluster_d`, `design_effect`, `n_effective_cells`, `p_inflation_ratio`); `n_pairs` is the number of units the primary test runs on (clusters by default; `n_cells_paired`/`n_clusters` give the cell and cluster counts). Asymptotic P values that underflow double precision (P < 2.2e-16) are noted in the `note` column, as are cluster counts too small for the exact Wilcoxon to reach P < 0.05 (< 6 clusters). The exact n for every analysis, the chosen cluster key, the cluster count and size distribution, and the full independence record are written to `*.stats.json`, together with the test settings, the bootstrap seed and the software versions.
+
+Options: `--no-stats` disables the tests; `--stats-reference`, `--stats-boot`, `--stats-seed`, `--stats-alpha` tune them; `--stats-pair-key` overrides the columns that identify one simulated cell (default `accession_1,accession_2,cellLine,overall_ploidy,CNA_percent`); `--stats-cluster-key` / `--cluster-key` overrides the cluster columns (`none` = naive per-cell level, discouraged); `--stats-no-cluster` is an alias of `none`; `--cluster-agg` selects median (default) or mean aggregation within clusters. Nothing else in the pipeline changes: no run rule, no Snakefile difference, same figures.
+
+
 ### How to benchmark ploidy-inference tools (optional)
 
 Tools such as [scAbsolute](https://doi.org/10.1186/s13059-024-03204-y) report a ploidy estimate instead of a per-cell copy-number profile, so they are benchmarked by an opt-in module of their own (`ploidy_tools.py`) rather than by the CNV-caller pipeline above.

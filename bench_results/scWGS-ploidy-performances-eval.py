@@ -784,12 +784,24 @@ def _stat_arg_parser():
                    help='Seed of the bootstrap RNG (default: 1).')
     p.add_argument('--stats-alpha', type=float, default=0.05, metavar='ALPHA',
                    help='Family-wise alpha for Holm rejection (default: 0.05).')
+    # [REV v2] cluster (independent-unit) option: within a germline-derived plot
+    # group, datasets of the same donor share that donor's biological material, so
+    # per-method results are correlated; inference aggregates to the donor level.
+    p.add_argument('--stats-cluster-key', default='donor', metavar='COLS',
+                   help='Comma-separated columns defining the independent unit '
+                        '(cluster) within each plot group. Default: the first '
+                        'usable of donor -> cellLine -> dataset. Pass "none" to '
+                        'revert to the naive per-dataset tests.')
     return p
 
 
 def _run_ploidy_stats(known):
-    """[REV] Friedman + pairwise Wilcoxon (paired by sample) on the balloon-plot
-    table that base.main() has just written (<output>_pct_within_long.tsv)."""
+    """[REV v2] cluster-level Friedman + pairwise Wilcoxon/sign tests on the
+    balloon-plot table that base.main() has just written
+    (<output>_pct_within_long.tsv).  Datasets of one germline donor share that
+    donor's material, so per-method results are correlated within donors; the
+    tests therefore run on per-donor (cluster) medians by default, with the
+    per-dataset (naive) comparison kept for transparency."""
     import pandas as pd
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -804,10 +816,21 @@ def _run_ploidy_stats(known):
         logging.warning('ploidy statistics skipped: %s not found', tsv_path)
         return
     tab = pd.read_csv(tsv_path, sep='\t')
-    logging.info('running ploidy statistical tests (reference method: %s) ...', known.stats_reference)
+    if (known.stats_cluster_key or '').strip().lower() in ('none', 'naive', 'off'):
+        cluster_key_cols = []          # naive per-dataset mode (discouraged)
+    elif known.stats_cluster_key:
+        cluster_key_cols = [c.strip() for c in known.stats_cluster_key.split(',') if c.strip()]
+    else:
+        cluster_key_cols = None        # default chain: donor -> cellLine -> dataset
+    logging.info('running ploidy statistical tests (reference method: %s, cluster key: %s) ...',
+                 known.stats_reference,
+                 'none (NAIVE per-dataset)' if cluster_key_cols == []
+                 else (cluster_key_cols or stat_tests.PLOIDY_CLUSTER_FALLBACK_CHAIN))
     stat_tests.run_ploidy_benchmark_stats(
         tab, known.output,
         reference=known.stats_reference,
+        cluster_key_cols=cluster_key_cols,
+        cluster_agg='median',
         n_resamples=known.stats_boot,
         seed=known.stats_seed,
         alpha=known.stats_alpha)
