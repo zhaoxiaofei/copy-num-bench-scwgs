@@ -28,6 +28,169 @@ except ImportError:  # pragma: no cover - only if the file tree is broken
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(levelname)s %(message)s')
 
+
+# --------------------------------------------------------------------------- #
+# [REV] LaTeX export of the pairwise statistical table                        #
+# --------------------------------------------------------------------------- #
+# The statistical tests write <output>.stats.pairwise.tsv (see README.md).
+# This block turns the important part of that file -- the pairwise rows of the
+# two ground-truth scenarios (scenario in {Hap_0, Hap_1}) restricted to the
+# columns (scenario, metric, caller_b, p_value_holm) -- into a copy-paste-ready
+# booktabs LaTeX table, with the scenario column relabelled
+# 'Ground-truth derivation' and the table caption (legend) filled in.
+
+_CALLER_DISPLAY = {
+    'aneufinder': 'AneuFinder',
+    'flcna'     : 'FLCNA',
+    'chisel'    : 'Chisel',
+    'copynumber': 'Copynumber',
+    'ginkgo'    : 'Ginkgo',
+    'hmmcopy'   : 'HMMcopy',
+    'secnv'     : 'SeCNV',
+    'sccnv'     : 'SCCNV',
+    'scyn'      : 'SCYN',
+    'scabsolute': 'scAbsolute',
+}
+
+
+def _format_reference(reference):
+    """Human-readable name of the reference caller/method (e.g. 'ginkgo|10')."""
+    ref = str(reference)
+    if '|' in ref:
+        tool, cap = ref.split('|', 1)
+        return F'{_CALLER_DISPLAY.get(tool, tool.capitalize())} capped at CN {cap}'
+    return _CALLER_DISPLAY.get(ref, ref.capitalize())
+
+
+def _perf_legend(ref_desc):
+    """Table legend for the CNV-calling performance pairwise table."""
+    return (
+        'Pairwise comparison of CNV-calling performance between the reference caller '
+        F'({ref_desc}) and each other caller ($b$), stratified by ground-truth derivation. '
+        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
+        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
+        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
+        'from the pre-simulated data (Fig.~1a). $p$ values are two-sided Wilcoxon '
+        'signed-rank tests on per-cluster medians of the paired per-cell differences '
+        '(reference vs.\\ caller $b$), Holm--Bonferroni-adjusted within each (scenario, '
+        'metric) family; bold values are significant at the 0.05 family-wise level. '
+        'CN, copy number.'
+    )
+
+
+def _ploidy_legend(ref_desc):
+    """Table legend for the ploidy-estimation pairwise table."""
+    return (
+        'Pairwise comparison of ploidy-estimation accuracy between the reference method '
+        F'({ref_desc}) and each other method ($b$), stratified by ground-truth derivation. '
+        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
+        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
+        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
+        'from the pre-simulated data (Fig.~1a). The metric is the percentage of cells '
+        'whose ploidy estimate is within $\\pm$0.5 of the ground truth. $p$ values are '
+        'two-sided Wilcoxon signed-rank tests on per-cluster medians of the paired '
+        'per-dataset differences (default cluster: donor), Holm--Bonferroni-adjusted '
+        'within each (scenario, metric) family; bold values are significant at the 0.05 '
+        'family-wise level.'
+    )
+
+
+def _tex_escape(s):
+    """Escape LaTeX special characters in a table text cell."""
+    return (str(s)
+            .replace('\\', r'\textbackslash{}')
+            .replace('&', r'\&')
+            .replace('%', r'\%')
+            .replace('_', r'\_')
+            .replace('#', r'\#')
+            .replace('$', r'\$'))
+
+
+def _fmt_pvalue_holm(x, alpha=0.05):
+    """Format one Holm-adjusted P value for a LaTeX table cell.
+
+    Missing values become '--'; underflow (P = 0) becomes '<2.2e-16'; values
+    >= 1e-3 use three decimals, smaller ones scientific notation.  Values
+    significant at level `alpha` are wrapped in \\textbf.
+    """
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return '--'
+    if x != x or x in (float('inf'), float('-inf')):  # NaN / inf
+        return '--'
+    if x == 0.0:
+        s = '$<2.2\\times10^{-16}$'
+    elif x < 0.001:
+        mant, exp = F'{x:.2e}'.split('e')
+        s = F'${mant}\\times10^{{{int(exp)}}}$'
+    else:
+        s = F'{x:.3f}'
+    return F'\\textbf{{{s}}}' if x < alpha else s
+
+
+def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
+                           table_label='tab:pairwise'):
+    """Print a copy-paste-ready booktabs LaTeX table from a *.stats.pairwise.tsv file.
+
+    Only the pairwise rows of the two ground-truth scenarios (scenario in
+    {Hap_0, Hap_1}) are kept, restricted to the columns (scenario, metric,
+    caller_b, p_value_holm); the scenario column is relabelled
+    'Ground-truth derivation'.  The table caption (legend) is filled in
+    automatically.  Returns 0 on success, 1 on any problem.
+    """
+    import pandas as pd
+    if not os.path.isfile(tsv_path):
+        logging.error('pairwise stats file not found: %s', tsv_path)
+        logging.error('run the script with the statistical tests enabled (default) to generate it first')
+        return 1
+    tab = pd.read_csv(tsv_path, sep='\t')
+    for col in ('scenario', 'metric', 'caller_b', 'p_value_holm'):
+        if col not in tab.columns:
+            logging.error('column %r missing from %s (available: %s)',
+                          col, tsv_path, ', '.join(map(str, tab.columns)))
+            return 1
+    sub = tab.loc[tab['scenario'].isin(('Hap_0', 'Hap_1'))].copy()
+    if sub.empty:
+        logging.error('no rows with scenario in {Hap_0, Hap_1} in %s', tsv_path)
+        return 1
+    sub = sub.dropna(subset=['scenario', 'metric', 'caller_b'])
+    # Row order: Hap_0 first, then Hap_1 (as in the main figures); metrics and
+    # compared callers keep their order of first appearance in the input file.
+    scenario_order = ['Hap_0', 'Hap_1']
+    metric_order = list(dict.fromkeys(sub['metric'].tolist()))
+    caller_order = list(dict.fromkeys(sub['caller_b'].tolist()))
+    sub['scenario'] = pd.Categorical(sub['scenario'], categories=scenario_order, ordered=True)
+    sub['metric'] = pd.Categorical(sub['metric'], categories=metric_order, ordered=True)
+    sub['caller_b'] = pd.Categorical(sub['caller_b'], categories=caller_order, ordered=True)
+    sub = sub.sort_values(['scenario', 'metric', 'caller_b'])
+
+    legend = (_ploidy_legend(_format_reference(reference)) if legend_kind == 'ploidy'
+              else _perf_legend(_format_reference(reference)))
+    lines = [
+        F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
+        '(requires \\usepackage{booktabs})',
+        '\\begin{table}[htbp]',
+        '  \\centering',
+        F'  \\caption{{{legend}}}',
+        F'  \\label{{{table_label}}}',
+        '  \\begin{tabular}{lllr}',
+        '    \\toprule',
+        '    Ground-truth derivation & Metric & Caller $b$ & Holm-adjusted $p$ \\\\',
+        '    \\midrule',
+    ]
+    for rec in sub.itertuples(index=False):
+        lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
+                     F'& {_tex_escape(rec.caller_b)} & {_fmt_pvalue_holm(rec.p_value_holm)} \\\\')
+    lines += [
+        '    \\bottomrule',
+        '  \\end{tabular}',
+        '\\end{table}',
+    ]
+    print('\n'.join(lines))
+    return 0
+
+
 parser1 = argparse.ArgumentParser()
 parser1.add_argument('-t', '--type', type=int, default=0, help='Output type. 0: all features. 1: testing features. 2: only plot the main fig. ')
 parser1.add_argument('-o', '--output', default='scWGS-performances')
@@ -64,8 +227,21 @@ parser1.add_argument('--stats-no-cluster', action='store_true', default=False,
                     help='Alias of --stats-cluster-key none (discouraged: '
                          'pseudoreplication; per-cell results of the same caller are '
                          'correlated within shared-material groups).')
+parser1.add_argument('--latex-table', action='store_true', default=False,
+                    help='Print a booktabs LaTeX table built from the existing '
+                         '<output>.stats.pairwise.tsv (rows with scenario in '
+                         '{Hap_0, Hap_1}; columns scenario, metric, caller_b, '
+                         'p_value_holm; scenario relabelled "Ground-truth '
+                         'derivation") and exit, without touching stdin.')
 
 args = parser1.parse_args()
+
+if args.latex_table:
+    sys.exit(emit_latex_stats_table(
+        args.output + '.stats.pairwise.tsv',
+        reference=args.stats_reference,
+        legend_kind='perf',
+        table_label='tab:scwgs-perf-pairwise'))
 
 # The triple-quoted string below maps each caller to its journal and publication year
 '''
@@ -778,3 +954,4 @@ with PdfPages(args.output + '-all.pdf') as pdf:
             pdf.savefig(fig1, bbox_inches='tight', dpi=75)
             plt.close(fig1)
   
+

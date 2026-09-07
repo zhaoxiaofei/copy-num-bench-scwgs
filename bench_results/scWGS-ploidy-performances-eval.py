@@ -29,6 +29,18 @@ Method-specific rules
 The combined 2×2 figure follows common manuscript conventions: lowercase bold
 panel letters (a–d) at the upper-left outside each axes, no embedded figure
 headline/caption, fully horizontal, vertically interleaved method labels, explicit CapAt10 labels, and one shared legend below the panels, and collision-free two-tier x-axis labels.
+
+Statistical tests (one independent set per subplot)
+---------------------------------------------------
+After the figures, the ploidy benchmark is tested SEPARATELY for each of the
+four panels (COLO-829, HCC1395, HeLa, ACT).  The germline-derived row labels
+are reused across the three cell-line panels (the label omits the emulated
+cell line), so pooling panels would duplicate (dataset, method) keys and
+break the per-sample pairing; splitting by ``plot`` keeps exactly one row per
+(dataset, method) inside every test family.  Each panel writes its own
+``<output>.<PANEL>.stats.*.tsv`` files; ``--latex-table`` prints one booktabs
+table per panel, and ``--stats-only`` re-runs the tests without redrawing the
+figures.
 """
 
 from __future__ import annotations
@@ -50,8 +62,12 @@ from matplotlib.patches import Patch, Rectangle
 
 # [REV] Statistical tests for the ploidy benchmark (Friedman omnibus +
 # two-sided Wilcoxon signed-rank post-hoc paired by sample with Holm
-# correction, effect sizes, BCa bootstrap CIs).  Loaded lazily in
-# _run_ploidy_stats() because the sibling module only needs scipy/pandas.
+# correction, effect sizes, BCa bootstrap CIs), run as FOUR INDEPENDENT sets,
+# one per balloon subplot (COLO-829, HCC1395, HeLa, ACT): the germline-derived
+# row labels are reused across the three cell-line panels, so pooling panels
+# would duplicate (dataset, method) keys and break the per-sample pairing.
+# Loaded lazily in _run_ploidy_stats() because the sibling module only needs
+# scipy/pandas.
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(levelname)s %(message)s')
 
@@ -112,6 +128,10 @@ INDIVIDUAL_FIGSIZE = (8.1, 5.9)
 # Cache display payloads because the original v02 passes only the percentage
 # matrix to its combined-figure function.
 _PANEL_CACHE = {}
+
+# The four balloon subplots written by v02 (PLOT_SPECS order).  The ploidy
+# statistical tests are run independently, one set per panel in this order.
+PANEL_ORDER = ('COLO-829', 'HCC1395', 'HeLa', 'ACT')
 
 
 # ======================================================================================
@@ -766,6 +786,173 @@ def install_plotting_overrides(base):
 
 
 # ======================================================================================
+# LaTeX export of the pairwise statistical table
+# ======================================================================================
+# The per-panel statistical tests write <output>.<PANEL>.stats.pairwise.tsv
+# (plus the other per-prefix stats files).  This block turns the important
+# part of each pairwise file -- the pairwise rows of the two ground-truth
+# scenarios (scenario in {Hap_0, Hap_1}) restricted to the columns (scenario,
+# metric, caller_b, p_value_holm) -- into a copy-paste-ready booktabs LaTeX
+# table, with the scenario column relabelled 'Ground-truth derivation' and
+# the table caption (legend) filled in.
+
+_CALLER_DISPLAY = {
+    'aneufinder': 'AneuFinder',
+    'flcna'     : 'FLCNA',
+    'chisel'    : 'Chisel',
+    'copynumber': 'Copynumber',
+    'ginkgo'    : 'Ginkgo',
+    'hmmcopy'   : 'HMMcopy',
+    'secnv'     : 'SeCNV',
+    'sccnv'     : 'SCCNV',
+    'scyn'      : 'SCYN',
+    'scabsolute': 'scAbsolute',
+}
+
+
+def _format_reference(reference):
+    """Human-readable name of the reference caller/method (e.g. 'ginkgo|10')."""
+    ref = str(reference)
+    if '|' in ref:
+        tool, cap = ref.split('|', 1)
+        return F'{_CALLER_DISPLAY.get(tool, tool.capitalize())} capped at CN {cap}'
+    return _CALLER_DISPLAY.get(ref, ref.capitalize())
+
+
+def _perf_legend(ref_desc):
+    """Table legend for the CNV-calling performance pairwise table."""
+    return (
+        'Pairwise comparison of CNV-calling performance between the reference caller '
+        F'({ref_desc}) and each other caller ($b$), stratified by ground-truth derivation. '
+        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
+        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
+        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
+        'from the pre-simulated data (Fig.~1a). $p$ values are two-sided Wilcoxon '
+        'signed-rank tests on per-cluster medians of the paired per-cell differences '
+        '(reference vs.\\ caller $b$), Holm--Bonferroni-adjusted within each (scenario, '
+        'metric) family; bold values are significant at the 0.05 family-wise level. '
+        'CN, copy number.'
+    )
+
+
+def _ploidy_legend(ref_desc):
+    """Table legend for the ploidy-estimation pairwise table."""
+    return (
+        'Pairwise comparison of ploidy-estimation accuracy between the reference method '
+        F'({ref_desc}) and each other method ($b$), stratified by ground-truth derivation. '
+        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
+        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
+        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
+        'from the pre-simulated data (Fig.~1a). The metric is the percentage of cells '
+        'whose ploidy estimate is within $\\pm$0.5 of the ground truth. $p$ values are '
+        'two-sided Wilcoxon signed-rank tests on per-cluster medians of the paired '
+        'per-dataset differences (default cluster: donor), Holm--Bonferroni-adjusted '
+        'within each (panel, scenario, metric) family -- the four panels (COLO-829, '
+        'HCC1395, HeLa, ACT) are tested as independent families -- and bold values are '
+        'significant at the 0.05 family-wise level.'
+    )
+
+
+def _tex_escape(s):
+    """Escape LaTeX special characters in a table text cell."""
+    return (str(s)
+            .replace('\\', r'\textbackslash{}')
+            .replace('&', r'\&')
+            .replace('%', r'\%')
+            .replace('_', r'\_')
+            .replace('#', r'\#')
+            .replace('$', r'\$'))
+
+
+def _fmt_pvalue_holm(x, alpha=0.05):
+    """Format one Holm-adjusted P value for a LaTeX table cell.
+
+    Missing values become '--'; underflow (P = 0) becomes '<2.2e-16'; values
+    >= 1e-3 use three decimals, smaller ones scientific notation.  Values
+    significant at level `alpha` are wrapped in \\textbf.
+    """
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return '--'
+    if x != x or x in (float('inf'), float('-inf')):  # NaN / inf
+        return '--'
+    if x == 0.0:
+        s = '$<2.2\\times10^{-16}$'
+    elif x < 0.001:
+        mant, exp = F'{x:.2e}'.split('e')
+        s = F'${mant}\\times10^{{{int(exp)}}}$'
+    else:
+        s = F'{x:.3f}'
+    return F'\\textbf{{{s}}}' if x < alpha else s
+
+
+def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
+                           table_label='tab:pairwise', caption_note=None):
+    """Print a copy-paste-ready booktabs LaTeX table from a *.stats.pairwise.tsv file.
+
+    Only the pairwise rows of the two ground-truth scenarios (scenario in
+    {Hap_0, Hap_1}) are kept, restricted to the columns (scenario, metric,
+    caller_b, p_value_holm); the scenario column is relabelled
+    'Ground-truth derivation'.  The table caption (legend) is filled in
+    automatically; ``caption_note`` (e.g. '(COLO-829 panel.)') is prepended to
+    it.  Returns 0 on success, 1 on any problem.
+    """
+    import pandas as pd
+    if not os.path.isfile(tsv_path):
+        logging.error('pairwise stats file not found: %s', tsv_path)
+        logging.error('run the script with the statistical tests enabled (default) to generate it first')
+        return 1
+    tab = pd.read_csv(tsv_path, sep='\t')
+    for col in ('scenario', 'metric', 'caller_b', 'p_value_holm'):
+        if col not in tab.columns:
+            logging.error('column %r missing from %s (available: %s)',
+                          col, tsv_path, ', '.join(map(str, tab.columns)))
+            return 1
+    sub = tab.loc[tab['scenario'].isin(('Hap_0', 'Hap_1'))].copy()
+    if sub.empty:
+        logging.error('no rows with scenario in {Hap_0, Hap_1} in %s', tsv_path)
+        return 1
+    sub = sub.dropna(subset=['scenario', 'metric', 'caller_b'])
+    # Row order: Hap_0 first, then Hap_1 (as in the main figures); metrics and
+    # compared callers keep their order of first appearance in the input file.
+    scenario_order = ['Hap_0', 'Hap_1']
+    metric_order = list(dict.fromkeys(sub['metric'].tolist()))
+    caller_order = list(dict.fromkeys(sub['caller_b'].tolist()))
+    sub['scenario'] = pd.Categorical(sub['scenario'], categories=scenario_order, ordered=True)
+    sub['metric'] = pd.Categorical(sub['metric'], categories=metric_order, ordered=True)
+    sub['caller_b'] = pd.Categorical(sub['caller_b'], categories=caller_order, ordered=True)
+    sub = sub.sort_values(['scenario', 'metric', 'caller_b'])
+
+    legend = (_ploidy_legend(_format_reference(reference)) if legend_kind == 'ploidy'
+              else _perf_legend(_format_reference(reference)))
+    if caption_note:
+        legend = F'{caption_note} {legend}'
+    lines = [
+        F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
+        '(requires \\usepackage{booktabs})',
+        '\\begin{table}[htbp]',
+        '  \\centering',
+        F'  \\caption{{{legend}}}',
+        F'  \\label{{{table_label}}}',
+        '  \\begin{tabular}{lllr}',
+        '    \\toprule',
+        '    Ground-truth derivation & Metric & Caller $b$ & Holm-adjusted $p$ \\\\',
+        '    \\midrule',
+    ]
+    for rec in sub.itertuples(index=False):
+        lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
+                     F'& {_tex_escape(rec.caller_b)} & {_fmt_pvalue_holm(rec.p_value_holm)} \\\\')
+    lines += [
+        '    \\bottomrule',
+        '  \\end{tabular}',
+        '\\end{table}',
+    ]
+    print('\n'.join(lines))
+    return 0
+
+
+# ======================================================================================
 # Entrypoint
 # ======================================================================================
 def _stat_arg_parser():
@@ -792,16 +979,35 @@ def _stat_arg_parser():
                         '(cluster) within each plot group. Default: the first '
                         'usable of donor -> cellLine -> dataset. Pass "none" to '
                         'revert to the naive per-dataset tests.')
+    # [REV v3] iterate on the per-panel tests without redrawing the figures.
+    p.add_argument('--stats-only', action='store_true', default=False,
+                   help='Run only the per-panel ploidy statistical tests on the '
+                        'existing <output>_pct_within_long.tsv and exit, without '
+                        'redrawing the figures.')
+    p.add_argument('--latex-table', action='store_true', default=False,
+                   help='Print one booktabs LaTeX table per panel (COLO-829, '
+                        'HCC1395, HeLa, ACT) built from the existing '
+                        '<output>.<PANEL>.stats.pairwise.tsv files (rows with '
+                        'scenario in {Hap_0, Hap_1}; columns scenario, metric, '
+                        'caller_b, p_value_holm; scenario relabelled "Ground-truth '
+                        'derivation") and exit, without running the pipeline.')
     return p
 
 
 def _run_ploidy_stats(known):
-    """[REV v2] cluster-level Friedman + pairwise Wilcoxon/sign tests on the
-    balloon-plot table that base.main() has just written
-    (<output>_pct_within_long.tsv).  Datasets of one germline donor share that
-    donor's material, so per-method results are correlated within donors; the
-    tests therefore run on per-donor (cluster) medians by default, with the
-    per-dataset (naive) comparison kept for transparency."""
+    """[REV v3] One independent set of statistical tests per subplot.
+
+    The long table written by v02 holds one row per (plot, dataset, method):
+    ``plot`` is the balloon subplot (COLO-829, HCC1395, HeLa, ACT) and the
+    germline-derived row labels are ``donor · sampleType · avgSpotLen`` WITHOUT
+    the emulated cell line, so the same (dataset, method) key legitimately
+    occurs in the three germline panels.  Pooling the panels therefore breaks
+    the per-sample pivot in stat_tests (ValueError: duplicate entries);
+    splitting by ``plot`` restores exactly one row per (dataset, method) inside
+    every test family and keeps the four panels statistically independent (the
+    Holm correction is applied within each panel's family only, never across
+    panels).  Each panel writes its own <output>.<PANEL>.stats.*.tsv files.
+    """
     import pandas as pd
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -816,27 +1022,117 @@ def _run_ploidy_stats(known):
         logging.warning('ploidy statistics skipped: %s not found', tsv_path)
         return
     tab = pd.read_csv(tsv_path, sep='\t')
+    if 'plot' not in tab.columns:
+        logging.warning('ploidy statistics skipped: %s has no "plot" column', tsv_path)
+        return
+
+    # Cluster (independent-unit) resolution, applied WITHIN each panel.
     if (known.stats_cluster_key or '').strip().lower() in ('none', 'naive', 'off'):
         cluster_key_cols = []          # naive per-dataset mode (discouraged)
     elif known.stats_cluster_key:
         cluster_key_cols = [c.strip() for c in known.stats_cluster_key.split(',') if c.strip()]
     else:
         cluster_key_cols = None        # default chain: donor -> cellLine -> dataset
-    logging.info('running ploidy statistical tests (reference method: %s, cluster key: %s) ...',
-                 known.stats_reference,
-                 'none (NAIVE per-dataset)' if cluster_key_cols == []
-                 else (cluster_key_cols or stat_tests.PLOIDY_CLUSTER_FALLBACK_CHAIN))
-    stat_tests.run_ploidy_benchmark_stats(
-        tab, known.output,
-        reference=known.stats_reference,
-        cluster_key_cols=cluster_key_cols,
-        cluster_agg='median',
-        n_resamples=known.stats_boot,
-        seed=known.stats_seed,
-        alpha=known.stats_alpha)
+
+    plot_order = [p for p in PANEL_ORDER if p in set(tab['plot'].dropna())]
+    for extra in tab['plot'].dropna().unique():
+        if extra not in plot_order:
+            plot_order.append(extra)
+
+    for plot in plot_order:
+        sub = tab[tab['plot'] == plot].copy()
+
+        # Drop figure-only placeholder rows (failed runs with no dataset label).
+        ds = sub['dataset']
+        keep = (ds.notna() & (ds.astype(str).str.strip() != '')
+                & (ds.astype(str) != 'None'))
+        sub = sub[keep]
+
+        # Mirror the figure's "not applicable" encoding (CHISEL in ACT).
+        for na_tool in NOT_APPLICABLE_BY_PLOT.get(plot, ()):
+            n0 = len(sub)
+            sub = sub[sub['tool'].astype(str).str.lower() != na_tool]
+            if len(sub) < n0:
+                logging.info('%s: dropped %d not-applicable %s row(s) from the tests',
+                             plot, n0 - len(sub), na_tool)
+
+        if sub.empty:
+            logging.warning('%s: no evaluable (dataset, method) rows; tests skipped', plot)
+            continue
+
+        # Pivot invariant inside this panel: exactly one row per (dataset,
+        # method).  Genuine duplicates (e.g. two input summaries covering the
+        # same ACT sample) keep one valid row and are reported, never silently
+        # merged across panels.
+        key = (['dataset', 'method'] if 'method' in sub.columns
+               else ['dataset', 'tool', 'max_cn'])
+        dup = sub.duplicated(subset=key, keep=False)
+        if dup.any():
+            logging.warning('%s: %d rows share the same %s; keeping one valid row '
+                            'per key (check the input summaries for duplicate '
+                            'evaluations of the same dataset)', plot, int(dup.sum()), key)
+            if 'failed' in sub.columns:
+                failed = sub['failed'].fillna(False).astype(bool)
+            else:
+                failed = pd.Series(False, index=sub.index)
+            sub = (sub.assign(_f=failed)
+                      .sort_values('_f')
+                      .drop_duplicates(subset=key, keep='first')
+                      .drop(columns='_f'))
+
+        n_ds = sub['dataset'].nunique()
+        n_m = (sub['method'].nunique() if 'method' in sub.columns
+               else sub.groupby(['tool', 'max_cn']).ngroups)
+        if n_ds < 2 or n_m < 3:
+            logging.warning('%s: only %d datasets x %d methods; Friedman/pairwise '
+                            'tests are not meaningful here, skipped', plot, n_ds, n_m)
+            continue
+
+        out_prefix = F'{known.output}.{plot}'
+        logging.info('running ploidy statistical tests for panel %s '
+                     '(reference: %s, cluster key: %s) -> %s.*.tsv',
+                     plot, known.stats_reference,
+                     'none (NAIVE per-dataset)' if cluster_key_cols == []
+                     else (cluster_key_cols or stat_tests.PLOIDY_CLUSTER_FALLBACK_CHAIN),
+                     out_prefix)
+        stat_tests.run_ploidy_benchmark_stats(
+            sub, out_prefix,
+            reference=known.stats_reference,
+            cluster_key_cols=cluster_key_cols,
+            cluster_agg='median',
+            n_resamples=known.stats_boot,
+            seed=known.stats_seed,
+            alpha=known.stats_alpha)
 
 
 def main(argv=None):
+    stat_parser = _stat_arg_parser()
+    known, rest = stat_parser.parse_known_args(argv if argv is not None else sys.argv[1:])
+    if known.latex_table:
+        # [REV v3] one table per panel; the four test sets are independent.
+        rc, found = 0, False
+        for plot in PANEL_ORDER:
+            pairwise_tsv = F'{known.output}.{plot}.stats.pairwise.tsv'
+            if not os.path.isfile(pairwise_tsv):
+                continue
+            found = True
+            print(F'\n% ==== panel {plot}: {pairwise_tsv} ====')
+            rc |= emit_latex_stats_table(
+                pairwise_tsv,
+                reference=known.stats_reference,
+                legend_kind='ploidy',
+                table_label=F'tab:scwgs-ploidy-pairwise-{plot.lower().replace("-", "")}',
+                caption_note=F'({plot} panel.)')
+        if not found:
+            logging.error('no per-panel pairwise stats files '
+                          '(<output>.<PANEL>.stats.pairwise.tsv); run the script with '
+                          'the statistical tests enabled (default) to generate them first')
+            return 1
+        return rc
+    if known.stats_only:
+        # [REV v3] iterate on the per-panel tests without redrawing the figures.
+        _run_ploidy_stats(known)
+        return 0
     base = _load_base_module()
     install_plotting_overrides(base)
     # [REV] split off the statistical-test flags, then delegate the rest
@@ -850,4 +1146,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
