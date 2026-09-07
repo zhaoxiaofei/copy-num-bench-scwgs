@@ -33,7 +33,9 @@ headline/caption, fully horizontal, vertically interleaved method labels, explic
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import logging
 import os
 import sys
 from collections import OrderedDict
@@ -45,6 +47,13 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.patches import Patch, Rectangle
+
+# [REV] Statistical tests for the ploidy benchmark (Friedman omnibus +
+# two-sided Wilcoxon signed-rank post-hoc paired by sample with Holm
+# correction, effect sizes, BCa bootstrap CIs).  Loaded lazily in
+# _run_ploidy_stats() because the sibling module only needs scipy/pandas.
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(levelname)s %(message)s')
 
 
 # ======================================================================================
@@ -759,10 +768,61 @@ def install_plotting_overrides(base):
 # ======================================================================================
 # Entrypoint
 # ======================================================================================
+def _stat_arg_parser():
+    """[REV] Flags consumed by this wrapper; everything else is forwarded to the
+    v02 base parser (same -o default, re-injected when delegating)."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument('-o', '--output', default='scWGS-ploidy-performances')
+    p.add_argument('--no-stats', dest='stats', action='store_false', default=True,
+                   help='Skip the statistical tests (default: run them after the figures).')
+    p.add_argument('--stats-reference', default='ginkgo|10', metavar='METHOD',
+                   help="Reference method for the pairwise tests, as 'tool|max_cn' "
+                        "(default: ginkgo|10, i.e. Ginkgo capped at 10).")
+    p.add_argument('--stats-boot', type=int, default=10000, metavar='N',
+                   help='Bootstrap resamples for the BCa CIs (default: 10000).')
+    p.add_argument('--stats-seed', type=int, default=1, metavar='SEED',
+                   help='Seed of the bootstrap RNG (default: 1).')
+    p.add_argument('--stats-alpha', type=float, default=0.05, metavar='ALPHA',
+                   help='Family-wise alpha for Holm rejection (default: 0.05).')
+    return p
+
+
+def _run_ploidy_stats(known):
+    """[REV] Friedman + pairwise Wilcoxon (paired by sample) on the balloon-plot
+    table that base.main() has just written (<output>_pct_within_long.tsv)."""
+    import pandas as pd
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import stat_tests
+    except ImportError:
+        logging.warning('stat_tests.py not found next to this script: statistical tests skipped')
+        return
+    tsv_path = F'{known.output}_pct_within_long.tsv'
+    if not os.path.isfile(tsv_path):
+        logging.warning('ploidy statistics skipped: %s not found', tsv_path)
+        return
+    tab = pd.read_csv(tsv_path, sep='\t')
+    logging.info('running ploidy statistical tests (reference method: %s) ...', known.stats_reference)
+    stat_tests.run_ploidy_benchmark_stats(
+        tab, known.output,
+        reference=known.stats_reference,
+        n_resamples=known.stats_boot,
+        seed=known.stats_seed,
+        alpha=known.stats_alpha)
+
+
 def main(argv=None):
     base = _load_base_module()
     install_plotting_overrides(base)
-    return base.main(argv)
+    # [REV] split off the statistical-test flags, then delegate the rest
+    stat_parser = _stat_arg_parser()
+    known, rest = stat_parser.parse_known_args(argv if argv is not None else sys.argv[1:])
+    ret = base.main(rest + ['-o', known.output])
+    if known.stats and (ret is None or int(ret) == 0):
+        _run_ploidy_stats(known)
+    return ret
 
 
 if __name__ == "__main__":

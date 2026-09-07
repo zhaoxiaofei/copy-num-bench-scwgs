@@ -18,11 +18,38 @@ import matplotlib.gridspec as gridspec
 import seaborn as sns
 from matplotlib.patches import Patch, Rectangle, PathPatch
 
+# [REV] Statistical tests (Friedman omnibus + two-sided Wilcoxon signed-rank
+# post-hoc with Holm correction, effect sizes, BCa bootstrap CIs).  The sibling
+# module is found because Python puts this script's directory on sys.path.
+try:
+    import stat_tests
+except ImportError:  # pragma: no cover - only if the file tree is broken
+    stat_tests = None
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(levelname)s %(message)s')
 
 parser1 = argparse.ArgumentParser()
 parser1.add_argument('-t', '--type', type=int, default=0, help='Output type. 0: all features. 1: testing features. 2: only plot the main fig. ')
 parser1.add_argument('-o', '--output', default='scWGS-performances')
+# [REV] statistical-test options (see bench_results/stat_tests.py)
+parser1.add_argument('--no-stats', dest='stats', action='store_false', default=True,
+                    help='Skip the statistical tests (default: run them and write '
+                         '<output>.stats.{pairwise,friedman,concordance}.tsv + .stats.json).')
+parser1.add_argument('--stats-only', action='store_true', default=False,
+                    help='Run only the statistical tests; exit before any figure is drawn.')
+parser1.add_argument('--stats-reference', default='ginkgo', metavar='CALLER',
+                    help='Reference caller for the pairwise tests (default: ginkgo).')
+parser1.add_argument('--stats-all-pairs', action='store_true', default=False,
+                    help='Test all caller pairs instead of reference vs. every other caller.')
+parser1.add_argument('--stats-boot', type=int, default=10000, metavar='N',
+                    help='Bootstrap resamples for the BCa CIs (default: 10000).')
+parser1.add_argument('--stats-seed', type=int, default=1, metavar='SEED',
+                    help='Seed of the bootstrap RNG (default: 1).')
+parser1.add_argument('--stats-alpha', type=float, default=0.05, metavar='ALPHA',
+                    help='Family-wise alpha for Holm rejection (default: 0.05).')
+parser1.add_argument('--stats-pair-key', default=None, metavar='COLS',
+                    help='Comma-separated columns identifying one simulated cell '
+                         '(default: accession_1,accession_2,cellLine,overall_ploidy,CNA_percent).')
 
 args = parser1.parse_args()
 
@@ -184,6 +211,40 @@ SCENARIO_LINE_COLORS = {s: tuple(0.75 * ch for ch in _scenario_palette[i]) for i
 # metric-by-method grid figure ('scRNA-seq CNV caller performance across
 # datasets, methods, and metrics').
 THE_FIG_TITLE = 'scWGS CNV caller performance across simulated cells, callers, and metrics'
+
+
+# --------------------------------------------------------------------------- #
+# [REV] Statistical tests                                                      #
+# --------------------------------------------------------------------------- #
+# Every caller is evaluated on the SAME simulated cells, so per-cell metrics are
+# paired (blocked) by cell.  The metrics are bounded and non-normal, so the tests
+# are nonparametric and two-sided: Friedman omnibus per (scenario, metric);
+# post-hoc two-sided Wilcoxon signed-rank (reference caller vs. every other,
+# paired per cell) with Holm-Bonferroni correction; matched-pairs rank-biserial
+# and common-language effect sizes; BCa bootstrap 95% CIs of the median
+# difference; Spearman concordance of the Hap_0 vs. Hap_1 caller rankings.
+# Exact P values, effect sizes and CIs land in:
+#   <output>.stats.pairwise.tsv, <output>.stats.friedman.tsv,
+#   <output>.stats.concordance.tsv, <output>.stats.json
+if args.stats:
+    if stat_tests is None:
+        logging.warning('stat_tests.py not found next to this script: statistical tests skipped')
+    else:
+        _stats_prefix = args.output
+        logging.info('running statistical tests (reference caller: %s) ...', args.stats_reference)
+        stat_tests.run_caller_benchmark_stats(
+            the_df, _stats_prefix,
+            perf_metrics=the_perf_metrics,
+            gamete_type2short=gamete_type2short,
+            reference=args.stats_reference,
+            all_pairs=args.stats_all_pairs,
+            pair_key_cols=(args.stats_pair_key.split(',') if args.stats_pair_key else None),
+            n_resamples=args.stats_boot,
+            seed=args.stats_seed,
+            alpha=args.stats_alpha)
+        if args.stats_only:
+            logging.info('--stats-only: exiting before the figures')
+            sys.exit(0)
 
 
 # --------------------------------------------------------------------------- #
