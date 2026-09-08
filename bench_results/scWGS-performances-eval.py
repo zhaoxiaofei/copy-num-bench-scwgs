@@ -4,7 +4,6 @@ import os
 import sys
 
 from multiprocessing import Pool
-from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -35,9 +34,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(level
 # The statistical tests write <output>.stats.pairwise.tsv (see README.md).
 # This block turns the important part of that file -- the pairwise rows of the
 # two ground-truth scenarios (scenario in {Hap_0, Hap_1}) restricted to the
-# columns (scenario, metric, caller_b, p_value_holm) -- into a copy-paste-ready
-# booktabs LaTeX table, with the scenario column relabelled
+# columns (scenario, metric, caller_a, caller_b, pvalue_holm) -- into a
+# copy-paste-ready booktabs LaTeX table, with the scenario column relabelled
 # 'Ground-truth derivation' and the table caption (legend) filled in.
+# [REV] By default the same table is ALSO written to
+# <output>.stats.pairwise.tex after every successful stats run
+# (--no-latex-table disables this); --latex-table additionally prints it to
+# stdout and exits without reading stdin.
 
 _CALLER_DISPLAY = {
     'aneufinder': 'AneuFinder',
@@ -62,11 +65,14 @@ def _format_reference(reference):
     return _CALLER_DISPLAY.get(ref, ref.capitalize())
 
 
-def _perf_legend(ref_desc):
+def _perf_legend(ref_desc, ref_is_constant_column=True):
     """Table legend for the CNV-calling performance pairwise table."""
+    ref_clause = (F'({ref_desc})'
+                  if ref_is_constant_column else
+                  F'($a$; see the Caller $a$ column, {ref_desc} by default)')
     return (
         'Pairwise comparison of CNV-calling performance between the reference caller '
-        F'({ref_desc}) and each other caller ($b$), stratified by ground-truth derivation. '
+        F'{ref_clause} and each other caller ($b$), stratified by ground-truth derivation. '
         'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
         'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
         '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
@@ -75,23 +81,6 @@ def _perf_legend(ref_desc):
         '(reference vs.\\ caller $b$), Holm--Bonferroni-adjusted within each (scenario, '
         'metric) family; bold values are significant at the 0.05 family-wise level. '
         'CN, copy number.'
-    )
-
-
-def _ploidy_legend(ref_desc):
-    """Table legend for the ploidy-estimation pairwise table."""
-    return (
-        'Pairwise comparison of ploidy-estimation accuracy between the reference method '
-        F'({ref_desc}) and each other method ($b$), stratified by ground-truth derivation. '
-        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
-        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
-        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
-        'from the pre-simulated data (Fig.~1a). The metric is the percentage of cells '
-        'whose ploidy estimate is within $\\pm$0.5 of the ground truth. $p$ values are '
-        'two-sided Wilcoxon signed-rank tests on per-cluster medians of the paired '
-        'per-dataset differences (default cluster: donor), Holm--Bonferroni-adjusted '
-        'within each (scenario, metric) family; bold values are significant at the 0.05 '
-        'family-wise level.'
     )
 
 
@@ -129,31 +118,34 @@ def _fmt_pvalue_holm(x, alpha=0.05):
     return F'\\textbf{{{s}}}' if x < alpha else s
 
 
-def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
-                           table_label='tab:pairwise'):
-    """Print a copy-paste-ready booktabs LaTeX table from a *.stats.pairwise.tsv file.
+def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
+                       table_label='tab:pairwise', alpha=0.05):
+    """Build the booktabs LaTeX table from a *.stats.pairwise.tsv file.
 
     Only the pairwise rows of the two ground-truth scenarios (scenario in
     {Hap_0, Hap_1}) are kept, restricted to the columns (scenario, metric,
-    caller_b, p_value_holm); the scenario column is relabelled
-    'Ground-truth derivation'.  The table caption (legend) is filled in
-    automatically.  Returns 0 on success, 1 on any problem.
+    caller_a, caller_b, pvalue_holm); the scenario column is relabelled
+    'Ground-truth derivation'.  [FIX] The P-value column is 'pvalue_holm'
+    (as written by stat_tests.py), not 'p_value_holm'.  With
+    --stats-all-pairs the compared pairs are not all referenced to one caller,
+    so the constant-Caller-$a$ column is only omitted when a single reference
+    caller is actually present.  Returns the list of table lines, or None on
+    any problem (a reason is logged).
     """
-    import pandas as pd
     if not os.path.isfile(tsv_path):
         logging.error('pairwise stats file not found: %s', tsv_path)
         logging.error('run the script with the statistical tests enabled (default) to generate it first')
-        return 1
+        return None
     tab = pd.read_csv(tsv_path, sep='\t')
-    for col in ('scenario', 'metric', 'caller_b', 'p_value_holm'):
+    for col in ('scenario', 'metric', 'caller_b', 'pvalue_holm'):
         if col not in tab.columns:
             logging.error('column %r missing from %s (available: %s)',
                           col, tsv_path, ', '.join(map(str, tab.columns)))
-            return 1
+            return None
     sub = tab.loc[tab['scenario'].isin(('Hap_0', 'Hap_1'))].copy()
     if sub.empty:
         logging.error('no rows with scenario in {Hap_0, Hap_1} in %s', tsv_path)
-        return 1
+        return None
     sub = sub.dropna(subset=['scenario', 'metric', 'caller_b'])
     # Row order: Hap_0 first, then Hap_1 (as in the main figures); metrics and
     # compared callers keep their order of first appearance in the input file.
@@ -165,8 +157,18 @@ def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
     sub['caller_b'] = pd.Categorical(sub['caller_b'], categories=caller_order, ordered=True)
     sub = sub.sort_values(['scenario', 'metric', 'caller_b'])
 
-    legend = (_ploidy_legend(_format_reference(reference)) if legend_kind == 'ploidy'
-              else _perf_legend(_format_reference(reference)))
+    # With one fixed reference the Caller $a$ column is redundant (it goes
+    # into the caption); with --stats-all-pairs it is needed to identify pairs.
+    ref_callers = list(dict.fromkeys(sub['caller_a'].tolist())) if 'caller_a' in sub.columns else []
+    show_caller_a = len(ref_callers) > 1
+    ref_desc = _format_reference(reference)
+    legend = _perf_legend(ref_desc, ref_is_constant_column=not show_caller_a)
+    header = (('Ground-truth derivation & Metric & Caller $a$ & Caller $b$ '
+               '& Holm-adjusted $p$ \\\\')
+              if show_caller_a else
+              ('Ground-truth derivation & Metric & Caller $b$ '
+               '& Holm-adjusted $p$ \\\\'))
+    colspec = 'llllr' if show_caller_a else 'lllr'
     lines = [
         F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
         '(requires \\usepackage{booktabs})',
@@ -174,21 +176,64 @@ def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
         '  \\centering',
         F'  \\caption{{{legend}}}',
         F'  \\label{{{table_label}}}',
-        '  \\begin{tabular}{lllr}',
+        F'  \\begin{{tabular}}{{{colspec}}}',
         '    \\toprule',
-        '    Ground-truth derivation & Metric & Caller $b$ & Holm-adjusted $p$ \\\\',
+        F'    {header}',
         '    \\midrule',
     ]
     for rec in sub.itertuples(index=False):
-        lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
-                     F'& {_tex_escape(rec.caller_b)} & {_fmt_pvalue_holm(rec.p_value_holm)} \\\\')
+        p_cell = _fmt_pvalue_holm(rec.pvalue_holm, alpha=alpha)
+        if show_caller_a:
+            lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
+                         F'& {_tex_escape(rec.caller_a)} & {_tex_escape(rec.caller_b)} '
+                         F'& {p_cell} \\\\')
+        else:
+            lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
+                         F'& {_tex_escape(rec.caller_b)} & {p_cell} \\\\')
     lines += [
         '    \\bottomrule',
         '  \\end{tabular}',
         '\\end{table}',
     ]
+    return lines
+
+
+def emit_latex_stats_table(tsv_path, reference='ginkgo', legend_kind='perf',
+                           table_label='tab:pairwise', alpha=0.05):
+    """Print a copy-paste-ready booktabs LaTeX table from a *.stats.pairwise.tsv file.
+
+    See _latex_table_lines for the table contents.  Returns 0 on success,
+    1 on any problem.
+    """
+    lines = _latex_table_lines(tsv_path, reference=reference,
+                               legend_kind=legend_kind,
+                               table_label=table_label, alpha=alpha)
+    if lines is None:
+        return 1
     print('\n'.join(lines))
     return 0
+
+
+def write_latex_stats_table(tsv_path, tex_path, reference='ginkgo', legend_kind='perf',
+                            table_label='tab:pairwise', alpha=0.05):
+    """[REV] Write the booktabs LaTeX table to `tex_path` (default pipeline output).
+
+    Same table as emit_latex_stats_table, but into a file instead of stdout.
+    Returns 0 on success, 1 on any problem (logged; never raises).
+    """
+    try:
+        lines = _latex_table_lines(tsv_path, reference=reference,
+                                   legend_kind=legend_kind,
+                                   table_label=table_label, alpha=alpha)
+        if lines is None:
+            return 1
+        with open(tex_path, 'w') as fh:
+            fh.write('\n'.join(lines) + '\n')
+        logging.info('LaTeX pairwise table written to %s', tex_path)
+        return 0
+    except Exception as exc:  # pragma: no cover - never break the pipeline on cosmetics
+        logging.warning('could not write the LaTeX table %s: %s', tex_path, exc)
+        return 1
 
 
 parser1 = argparse.ArgumentParser()
@@ -216,23 +261,35 @@ parser1.add_argument('--stats-pair-key', default=None, metavar='COLS',
 # [REV v2] cluster (independent-experimental-unit) options: per-cell results of the
 # same caller are correlated within (accession_1, accession_2, cellLine) groups, so
 # inference is aggregated to the cluster level by default (see stat_tests.py).
-parser1.add_argument('--stats-cluster-key', default='donor', metavar='COLS',
+# [FIX] The default was 'donor' in the code while the documentation (this help
+# text, the module comments and README.md) all specified the stat_tests module
+# default accession_1,accession_2,cellLine; the code now matches the docs
+# (default None -> stat_tests.DEFAULT_CLUSTER_KEY).
+parser1.add_argument('--stats-cluster-key', default=None, metavar='COLS',
                     help='Comma-separated columns defining the independent experimental '
                          'unit (cluster) for the statistical tests. Default: '
                          'accession_1,accession_2,cellLine (the shared haplotype BAMs + '
-                         'truth template). Recommended sensitivity analysis: '
-                         '--stats-cluster-key donor,cellLine. Pass "none" to revert to '
-                         'the naive per-cell tests that treat every cell as independent.')
+                         'truth template; stat_tests.DEFAULT_CLUSTER_KEY). Recommended '
+                         'sensitivity analysis: --stats-cluster-key donor,cellLine. '
+                         'Pass "none" to revert to the naive per-cell tests that treat '
+                         'every cell as independent.')
 parser1.add_argument('--stats-no-cluster', action='store_true', default=False,
                     help='Alias of --stats-cluster-key none (discouraged: '
                          'pseudoreplication; per-cell results of the same caller are '
                          'correlated within shared-material groups).')
+# [REV] The LaTeX pairwise table is now generated BY DEFAULT (written to
+# <output>.stats.pairwise.tex after every successful stats run);
+# --no-latex-table opts out and --latex-table prints it to stdout and exits.
+parser1.add_argument('--no-latex-table', dest='latex_table_auto',
+                    action='store_false', default=True,
+                    help='Do not write <output>.stats.pairwise.tex after the '
+                         'statistical tests (default: write it).')
 parser1.add_argument('--latex-table', action='store_true', default=False,
-                    help='Print a booktabs LaTeX table built from the existing '
+                    help='Print the booktabs LaTeX table built from the existing '
                          '<output>.stats.pairwise.tsv (rows with scenario in '
                          '{Hap_0, Hap_1}; columns scenario, metric, caller_b, '
-                         'p_value_holm; scenario relabelled "Ground-truth '
-                         'derivation") and exit, without touching stdin.')
+                         'pvalue_holm; scenario relabelled "Ground-truth '
+                         'derivation") to stdout and exit, before reading stdin.')
 
 args = parser1.parse_args()
 
@@ -241,7 +298,8 @@ if args.latex_table:
         args.output + '.stats.pairwise.tsv',
         reference=args.stats_reference,
         legend_kind='perf',
-        table_label='tab:scwgs-perf-pairwise'))
+        table_label='tab:scwgs-perf-pairwise',
+        alpha=args.stats_alpha))
 
 # The triple-quoted string below maps each caller to its journal and publication year
 '''
@@ -312,7 +370,7 @@ CATEGORICAL_FEATURES_NAME2DESC = {
     # simulation-dependent
     'overall_ploidy' : 'Overall ploidy of the simulated cells, either diploid or aneuploid', # diploid or aneuploid  # [REV]
     'cellLine' : 'Cancer cell line (e.g., COLO-829, HCC1395, or HeLa) whose copy-number profile is emulated by the simulation',  # [REV]
-    'n_samples_mixed' : 'Number of near-haploid samples merged to simulate each cell (a technical detail)', # 0 or 1  # [REV]
+    'n_samples_mixed' : 'Number of near-haploid samples merged to simulate each cell (a technical detail)', # 1 or 2, as computed below from accession_1 vs accession_2  # [REV]
 }
 
 categorical_features = list(CATEGORICAL_FEATURES_NAME2DESC.keys())
@@ -337,6 +395,9 @@ caller_and_its_df_iterable = df.groupby('Caller')
 
 SHOW_MEDIAN_LABELS = True    # print the median of every box in a row just above the maximal-performance line
 SHOW_ABBREV_FOOTNOTE = True  # one-line abbreviation note at the very bottom of each figure
+SKIP_KDEPLOTS = True         # [FIX] the 2-D KDE layer carries so much vector graphics that the
+                             # supplementary PDF becomes enormous; keep the CODE_v2 behaviour
+                             # (KDE plots skipped) but make it an explicit, documented knob.
 
 # Verbose definitions: NOT drawn inside the figures anymore. Paste them into the figure caption.
 THE_PERF_METRIC_NAME2DESC = {
@@ -443,7 +504,7 @@ if args.stats:
                      args.stats_reference,
                      'none (NAIVE per-cell)' if _stats_cluster_key == []
                      else (_stats_cluster_key or stat_tests.DEFAULT_CLUSTER_KEY))
-        stat_tests.run_caller_benchmark_stats(
+        _stats_settings = stat_tests.run_caller_benchmark_stats(
             the_df, _stats_prefix,
             perf_metrics=the_perf_metrics,
             gamete_type2short=gamete_type2short,
@@ -455,6 +516,17 @@ if args.stats:
             n_resamples=args.stats_boot,
             seed=args.stats_seed,
             alpha=args.stats_alpha)
+        # [REV] The LaTeX pairwise table is generated BY DEFAULT after every
+        # successful stats run (also under --stats-only), so the numbers behind
+        # the figures and the manuscript table can never drift apart.
+        if _stats_settings is not None and args.latex_table_auto:
+            write_latex_stats_table(
+                args.output + '.stats.pairwise.tsv',
+                args.output + '.stats.pairwise.tex',
+                reference=args.stats_reference,
+                legend_kind='perf',
+                table_label='tab:scwgs-perf-pairwise',
+                alpha=args.stats_alpha)
         if args.stats_only:
             logging.info('--stats-only: exiting before the figures')
             sys.exit(0)
@@ -819,8 +891,10 @@ def plot_main():
 # Supplementary figures                                                       #
 # --------------------------------------------------------------------------- #
 
-def plot_onepage(args): # (continuous_features, categorical_features, the_perf_metrics):
-    feature, page_num = args
+def plot_onepage(page_args): # (continuous_features, categorical_features, the_perf_metrics):
+    # [FIX] the argument used to be called `args`, shadowing the global argparse
+    # namespace of the same name -- a maintenance trap.  Renamed to page_args.
+    feature, page_num = page_args
     if feature in logscale_features: feat_scale = 'log'
     else: feat_scale = ''
     logging.info(F'START plotting {feature} with scale={feat_scale}')
@@ -835,17 +909,24 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
     legend_ax = fig1.add_subplot(gs[0,:])
     legend_ax.set_axis_off()
     if feature in continuous_features:
-        feat_min = min(df[feature])
-        feat_max = max(df[feature])
+        # [FIX] NaN-safe data-driven windows: plain min()/max() return
+        # order-dependent results in the presence of NaNs.
+        feat_vals = pd.to_numeric(df[feature], errors='coerce').dropna()
+        feat_min = float(feat_vals.min()) if len(feat_vals) else 0.0
+        feat_max = float(feat_vals.max()) if len(feat_vals) else 1.0
         plot_feat_min = feat_min - (feat_max - feat_min) * 0.05
         plot_feat_max = feat_max + (feat_max - feat_min) * 0.05
         if feat_min > 0: plot_feat_minmax = feat_min * (1-0.05)
         else: plot_feat_minmax = -1e99
         if plot_feat_min < plot_feat_minmax: plot_feat_min = plot_feat_minmax
     for rowidx, perf_metric in enumerate(the_perf_metrics):
-        feature_all_perf_vals = list(df[('with_aneuploidy_aware_gametes.'+perf_metric)]) + list(df[('with_haploidy_assumed_gametes.'+perf_metric)])
-        min_perf_val = min(feature_all_perf_vals)
-        max_perf_val = max(feature_all_perf_vals)
+        feature_all_perf_vals = (pd.to_numeric(df[('with_aneuploidy_aware_gametes.'+perf_metric)], errors='coerce').dropna().tolist()
+                                 + pd.to_numeric(df[('with_haploidy_assumed_gametes.'+perf_metric)], errors='coerce').dropna().tolist())
+        if feature_all_perf_vals:
+            min_perf_val = min(feature_all_perf_vals)
+            max_perf_val = max(feature_all_perf_vals)
+        else:
+            min_perf_val, max_perf_val = 0.0, 1.0
         plot_perf_min = min_perf_val - (max_perf_val - min_perf_val) * 0.05
         plot_perf_max = max_perf_val + (max_perf_val - min_perf_val) * 0.05
         for colidx, (caller, caller_df) in enumerate(caller_and_its_df_iterable):
@@ -864,16 +945,23 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
                     plot_df[feature] = plot_df[feature].replace('345HS1', 'HS1') # prevent cluttering of words for the donor categorical variable
                 plot_ret = sns.stripplot (data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, rasterized=True)
             else:
-                logging.info(F'plotting {perf_metric} versus  {feature} for {caller}')
+                logging.info(F'plotting {perf_metric} versus {feature} for {caller}')
                 plot_ret = sns.scatterplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', style='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, markers=['x', '+'], rasterized=True)
-                skip_kdeplot = 1  # KDE has too much vector graphics in it, resulting in very big PDF # [FIX] CODE_v2 initialised this to 1, which skipped *every* KDE plot
-                for gt, plot_df_2 in plot_df.groupby('gamete_type'):
-                    if len(set(plot_df_2[perf_metric])) == 1:
-                        skip_kdeplot += 1
+                # [FIX] explicit, documented skip: the KDE layer carries so much
+                # vector graphics that the multipage PDF becomes enormous.
+                # (CODE_v2 initialised this flag to 1, which silently skipped
+                # *every* KDE plot; the behaviour is kept, but now it is named,
+                # and skipping it for data reasons is still reported.)
+                skip_kdeplot = SKIP_KDEPLOTS
+                if not skip_kdeplot:
+                    for _gt, plot_df_2 in plot_df.groupby('gamete_type'):
+                        if len(set(plot_df_2[perf_metric])) == 1:
+                            skip_kdeplot = True
+                            logging.warning(F'KDEplot of {perf_metric} versus {feature} for {caller} skipped: the {gamete_type2short[_gt]} values are constant')
                 if skip_kdeplot:
-                    logging.warning(f'Skip the KDEplot of {perf_metric} versus {feature} for {caller}')
+                    logging.debug(F'Skip the KDEplot of {perf_metric} versus {feature} for {caller}')
                 else:
-                    plot_ret2= sns.kdeplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', levels=10, fill=True, alpha=0.5, legend=False)
+                    sns.kdeplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', levels=10, fill=True, alpha=0.5, legend=False)
             # [NEW] one dashed reference line per scenario at that scenario's median performance,
             # so that almost-tied callers can still be told apart in the supplementary pages
             for scenario_short in SCENARIO_ORDER:
@@ -925,9 +1013,11 @@ def plot_onepage(args): # (continuous_features, categorical_features, the_perf_m
         fig1.supxlabel(factor, fontsize=20)
     fig1.supylabel('Performances', fontsize=24)
     A2Z = [chr(i) for i in range(ord('a'), ord('z') + 1)]  # [REV] lowercase panel letters, matching the a-f style of Fig. 1
+    # [FIX] more than 26 supplementary pages would previously raise an IndexError
+    panel_letter = A2Z[page_num] if page_num < len(A2Z) else F's{page_num + 1}'
     sublabel_ax = fig1.add_subplot(gs[0,0])
     sublabel_ax.set_axis_off()
-    sublabel_ax.set_title(A2Z[page_num], fontsize=30, ha='left', fontweight='bold')
+    sublabel_ax.set_title(panel_letter, fontsize=30, ha='left', fontweight='bold')
 
     logging.info(F'END: plotting {feature} with scale={feat_scale}')
     # Detach the figure from this worker process's pyplot registry *before* it is
@@ -947,7 +1037,7 @@ the_labels = None
 with PdfPages(args.output + '-all.pdf') as pdf:
     n_cores = min([os.cpu_count(), 32])
     with Pool(processes=n_cores) as pool:
-        my_map = pool.imap # map # pool.imap
+        my_map = pool.imap  # imap preserves the page order of the submitted tasks
         for fig1 in my_map(plot_onepage,
                 [(feature_withscale, page_num)
                 for page_num, feature_withscale in enumerate(continuous_features + categorical_features)]):
