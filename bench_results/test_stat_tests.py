@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Synthetic end-to-end test for bench_results/stat_tests.py (v2, cluster-robust).
+"""Synthetic end-to-end test for bench_results/stat_tests.py (v3, donor-level).
 
-Part A  Fig. 2 mode (long TSV): 300 simulated cells built from 12 independent
-        material units (accession_1 x accession_2 x cellLine), each unit
-        contributing 25 cells, with cluster-correlated caller effects - the
-        same correlation structure that the real benchmark has (shared donor
-        BAMs + shared truth template).  Verifies the cluster-level outputs,
-        the naive (--cluster-key none) fallback, and the new diagnostics
+Part A  Fig. 2 mode (long TSV): 300 simulated cells built from 12 shared
+        material units (accession_1 x accession_2 x cellLine) belonging to
+        NINE donors, with donor-correlated caller effects - the same
+        correlation structure that the real benchmark has (all cells of one
+        donor share that donor's haploid material).  Verifies the default
+        donor-level outputs, a fine-grained (shared-material) sensitivity
+        run, the naive (--cluster-key none) fallback, and the diagnostics
         columns.
 Part B  Fig. 3 mode (pct_within_long.tsv): datasets of one plot group share
         donors (germline groups) or are independent (ACT, empty donor).
@@ -41,11 +42,12 @@ metrics = ['accuracy', 'PCC_intCN', 'PCC_nonintCN', 'frac_cov_genome',
            'breakpoint_precision', 'breakpoint_recall', 'breakpoint_f1score']
 scenarios = ['with_haploidy_assumed_gametes', 'with_aneuploidy_aware_gametes']
 
-# 12 independent material units (the clusters): (acc1, acc2, cellLine)
+# 12 shared-material units, mapped onto 9 donors: (acc1, acc2, cellLine)
 units = []
 for i in range(12):
     units.append((F'SRR{100000 + i}', F'SRR{200000 + i * 5}',
                   ['COLO-829', 'HCC1395', 'HeLa'][i % 3]))
+donor_of_unit = [i % 9 for i in range(len(units))]   # nine donors, as in the benchmark
 N_PER_UNIT = 25            # cells per material unit -> 300 cells total
 cells = []
 for u_idx, (a1, a2, cl) in enumerate(units):
@@ -54,32 +56,32 @@ for u_idx, (a1, a2, cl) in enumerate(units):
         cells.append((a1, a2, cl,
                       ['diploid', 'aneuploid'][j % 2], 20.0 + 1.0 * j))
 
-# per-cell baseline, caller effect (ginkgo best), and CLUSTER x caller
-# interaction: the same-caller results of one material unit are correlated,
-# exactly like downsamplings of the same two haplotype BAMs scored against
-# the same COSMIC template.
+# per-cell baseline, caller effect (ginkgo best), and DONOR x caller
+# interaction: the same-caller results of one donor are correlated, exactly
+# like downsamplings of the same donor's haplotype BAMs.
 cell_base = rng.beta(5, 2, len(cells))
 caller_effect = {'ginkgo': 0.10, 'aneufinder': 0.02, 'chisel': -0.05,
                  'copynumber': -0.02, 'flcna': 0.0, 'hmmcopy': -0.06,
                  'sccnv': -0.01, 'scyn': -0.03, 'secnv': 0.01}
 unit_of_cell = [i // N_PER_UNIT for i in range(len(cells))]
-unit_caller_noise = {(u, c): rng.normal(0, 0.05)
-                     for u in range(len(units)) for c in callers}
+donor_caller_noise = {(donor_of_unit[u], c): rng.normal(0, 0.05)
+                      for u in range(len(units)) for c in callers}
 
 rows = []
 for c in callers:
     for i, (a1, a2, cl, op, cna) in enumerate(cells):
         u = unit_of_cell[i]
+        d = donor_of_unit[u]
         row = {'Caller': c, 'accession_1': a1, 'accession_2': a2, 'cellLine': cl,
                'overall_ploidy': op, 'CNA_percent': cna,
-               'donor': F'donor{u % 8}', 'sampleType': ['sperm', 'PB1', 'PB2'][u % 3],
+               'donor': F'donor{d}', 'sampleType': ['sperm', 'PB1', 'PB2'][u % 3],
                'avgSpotLen': 100, 'observed_ploidy': 2.0 + rng.normal(0, 0.3),
                'raw_total_sequences': int(1e6), 'reads_mapped': int(9e5),
                'bases_mapped_cigar': int(6e7)}
         for sc in scenarios:
             for m in metrics:
                 base = (cell_base[i] + caller_effect[c]
-                        + unit_caller_noise[(u, c)]      # cluster-shared effect
+                        + donor_caller_noise[(d, c)]     # donor-shared effect
                         + rng.normal(0, 0.04))
                 if m in ('PCC_intCN', 'PCC_nonintCN'):
                     base = 0.7 * base
@@ -89,13 +91,13 @@ long_df = pd.DataFrame(rows)
 long_tsv = os.path.join(OUT, 'synthetic.long.tsv')
 long_df.to_csv(long_tsv, sep='\t', index=False, na_rep='NA')
 print(F'wrote {long_tsv} ({len(long_df)} rows, {len(units)} material units '
-      F'x {N_PER_UNIT} cells)')
+      F'x {N_PER_UNIT} cells across {len(set(donor_of_unit))} donors)')
 
 with open(long_tsv) as fh:
     ret = subprocess.run([sys.executable, STAT, '-o', os.path.join(OUT, 'fig2stats'),
                           '--reference', 'ginkgo', '--boot', '500'],
                          stdin=fh, capture_output=True, text=True)
-print('Fig. 2 mode (cluster level, default) exit code:', ret.returncode)
+print('Fig. 2 mode (donor level, default) exit code:', ret.returncode)
 if ret.returncode != 0:
     print(ret.stdout); print(ret.stderr)
     sys.exit(1)
@@ -111,10 +113,10 @@ need_cols = ['inference_level', 'cluster_key', 'n_clusters', 'n_cells_paired',
 missing = [c for c in need_cols if c not in pw.columns]
 assert not missing, F'pairwise TSV missing columns: {missing}'
 assert set(pw['inference_level']) == {'cluster'}, set(pw['inference_level'])
-assert pw['n_clusters'].eq(12).all(), pw['n_clusters'].unique()
+assert pw['n_clusters'].eq(9).all(), pw['n_clusters'].unique()
 assert pw['n_cells_paired'].eq(300).all()
 assert fr['level'].eq('cluster').any() and fr['level'].eq('cell (naive)').any()
-assert fr.loc[fr['level'] == 'cluster', 'n_blocks'].eq(12).all()
+assert fr.loc[fr['level'] == 'cluster', 'n_blocks'].eq(9).all()
 assert fr.loc[fr['level'] == 'cell (naive)', 'n_blocks'].eq(300).all()
 caller_rows = pw[pw['caller_b'] != '<scenario>']       # caller-vs-caller rows
 scen_rows = pw[pw['caller_b'] == '<scenario>']         # Hap_0-vs-Hap_1 rows
@@ -130,27 +132,28 @@ assert pw['n_effective_cells'].le(300).all()
 assert caller_rows['p_inflation_ratio'].median() >= 1.0
 with open(os.path.join(OUT, 'fig2stats.stats.json')) as fh:
     js = json.load(fh)
-assert js['independence']['cluster_key'] == ['accession_1', 'accession_2', 'cellLine']
-assert js['independence']['n_clusters'] == 12
+assert js['independence']['cluster_key'] == ['donor']
+assert js['independence']['n_clusters'] == 9
 print(F'OK fig2stats: {len(pw)} pairwise rows, icc median '
       F'{pw["icc_within_cluster_d"].median():.3f}, design effect median '
       F'{pw["design_effect"].median():.2f}, n_eff median '
       F'{pw["n_effective_cells"].median():.1f}, P-inflation median '
       F'{pw["p_inflation_ratio"].median():.1f}x')
 
-# donor-level sensitivity key (coarser: 8 donors x 3 lines collapsed differently)
+# fine-grained sensitivity key: the 12 shared-material units (accession pair
+# x cellLine), i.e. NOT the default donor-level analysis
 with open(long_tsv) as fh:
-    ret = subprocess.run([sys.executable, STAT, '-o', os.path.join(OUT, 'fig2donor'),
+    ret = subprocess.run([sys.executable, STAT, '-o', os.path.join(OUT, 'fig2fine'),
                           '--reference', 'ginkgo', '--boot', '300',
-                          '--cluster-key', 'donor,cellLine'],
+                          '--cluster-key', 'accession_1,accession_2,cellLine'],
                          stdin=fh, capture_output=True, text=True)
-print('Fig. 2 mode (--cluster-key donor,cellLine) exit code:', ret.returncode)
+print('Fig. 2 mode (--cluster-key accession_1,accession_2,cellLine) exit code:', ret.returncode)
 if ret.returncode != 0:
     print(ret.stdout); print(ret.stderr)
     sys.exit(1)
-pw_donor = pd.read_csv(os.path.join(OUT, 'fig2donor.stats.pairwise.tsv'), sep='\t')
-assert pw_donor['cluster_key'].eq('donor|cellLine').all()
-print(F'OK fig2donor: donor-level clusters = {sorted(pw_donor["n_clusters"].unique())}')
+pw_fine = pd.read_csv(os.path.join(OUT, 'fig2fine.stats.pairwise.tsv'), sep='\t')
+assert pw_fine['cluster_key'].eq('accession_1|accession_2|cellLine').all()
+print(F'OK fig2fine: material-unit clusters = {sorted(pw_fine["n_clusters"].unique())}')
 
 # naive mode (--cluster-key none): v1 behaviour, explicitly flagged
 with open(long_tsv) as fh:
@@ -238,7 +241,7 @@ print(F'OK fig3stats: cluster columns per group '
 
 for f in ['fig2stats.stats.pairwise.tsv', 'fig2stats.stats.friedman.tsv',
           'fig2stats.stats.concordance.tsv', 'fig2stats.stats.json',
-          'fig2donor.stats.pairwise.tsv', 'fig2naive.stats.pairwise.tsv',
+          'fig2fine.stats.pairwise.tsv', 'fig2naive.stats.pairwise.tsv',
           'fig3stats.stats.pairwise.tsv', 'fig3stats.stats.friedman.tsv',
           'fig3stats.stats.json']:
     p = os.path.join(OUT, f)
@@ -273,7 +276,7 @@ def demo_independence_failure(n_reps=300, n_clusters=45, n_total=1989,
         w_cell = stat_tests.wilcoxon_signed_rank(d, np.zeros_like(d))
         rej_naive += int(w_cell['pvalue'] <= alpha)
         pvs_naive.append(w_cell['pvalue'])
-        # cluster-level test (v2 default): per-cluster medians
+        # donor/cluster-level test (default): per-cluster medians
         cm = pd.Series(d).groupby(cl).median().to_numpy()
         w_cl = stat_tests.wilcoxon_signed_rank(cm, np.zeros_like(cm))
         rej_cluster += int(w_cl['pvalue'] <= alpha)

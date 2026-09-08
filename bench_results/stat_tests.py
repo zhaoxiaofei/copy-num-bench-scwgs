@@ -35,7 +35,7 @@ nonparametric tests are used throughout, and all comparisons are two-sided
     outcomes (within/outside the window) when two tools are evaluated on
     identical evaluable cells.
 
-Independence assumptions (v2 revision - READ THIS)
+Independence assumptions (v3 revision - READ THIS)
 ==================================================
 WHAT IS MODELLED: every test is paired/blocked. All k callers are run on the
 SAME cells (Fig. 2) and all methods on the SAME datasets (Fig. 3); the
@@ -52,14 +52,12 @@ observations. For this benchmark that assumption is NOT credible:
 * The ~1,989 simulated cells are not ~1,989 independent genomes. They are
   built from the haploid material of only NINE donors (eight oocyte donors +
   one sperm donor) and THREE COSMIC copy-number templates (COLO-829,
-  HCC1395, HeLa). Every cell is a downsampling of the SAME two
-  haplotype-normalized BAMs of its (accession_1, accession_2) pair scored
-  against the same cellLine template, and the design deliberately preserves
-  the donors' coverage fluctuations, amplification bias and mapping
-  artifacts. A caller confused by donor-specific material repeats that error
-  on every cell carrying it: per-cell results of the same caller - and the
-  paired differences between two callers - are positively correlated within
-  (accession_1, accession_2, cellLine) groups, and (coarser) within donors.
+  HCC1395, HeLa). The design deliberately preserves the donors' coverage
+  fluctuations, amplification bias and mapping artifacts. A caller confused
+  by donor-specific material repeats that error on every cell carrying it:
+  per-cell results of the same caller - and the paired differences between
+  two callers - are positively correlated within donors (with finer
+  (accession_1, accession_2, cellLine) sub-groups inside each donor).
 * The ITH simulation is nested by construction (CNVs deleted at a lower CNA
   percentage p stay deleted at higher p), so neighbouring p values are
   correlated too.
@@ -86,18 +84,22 @@ it: under a true null with ICC = 0.3 the per-cell Wilcoxon rejects in the
 large majority of runs while the cluster-level test stays at the nominal
 level.
 
-THE v2 FIX (default behaviour)
+THE v3 FIX (default behaviour)
 ------------------------------
-Inference is moved to the level of the independent experimental unit, the
-CLUSTER, while per-cell quantities are kept as DESCRIPTIVE statistics and as
-flagged naive (non-inferential) comparisons:
+Inference is moved to the level of the independent experimental unit - the
+human DONOR for the Fig. 2 caller benchmark - while per-cell quantities are
+kept as DESCRIPTIVE statistics and as flagged naive (non-inferential)
+comparisons:
 
-* Fig. 2 default cluster key: (accession_1, accession_2, cellLine) - the
-  shared biological material + truth template (an equivalence relation on
-  cells; the looser "shares a donor" relation is not transitive and cannot
-  serve as a key). Coarser keys (--cluster-key donor,cellLine) are
-  recommended as a sensitivity analysis; --cluster-key none reverts to the
-  naive per-cell tests.
+* Fig. 2 default cluster key: `donor`.  All ~1,989 simulated cells are
+  downsamplings of the haploid material of only NINE donors, so per-cell
+  results of one caller - and the paired differences between callers - are
+  correlated within donors.  Each donor is therefore one effective sample,
+  and all cells of a donor are aggregated into one observation per caller
+  before testing.  Finer keys
+  (`--cluster-key accession_1,accession_2,cellLine`) are available as a
+  sensitivity analysis; `--cluster-key none` reverts to the naive per-cell
+  tests.
 * Per comparison, the per-cell differences d = x - y are aggregated to
   per-cluster medians d_g (one value per cluster); the two-sided Wilcoxon
   signed-rank test and the exact two-sided sign test run on the d_g, and
@@ -117,8 +119,8 @@ flagged naive (non-inferential) comparisons:
   the conservative choice).
 
 Estimand note: the cluster-level tests target the cluster-population
-generalisation ("on a NEW donor-pair x template unit, does caller A beat
-caller B?"), each cluster weighted equally; the cell-level medians and
+generalisation ("on a NEW donor, does caller A beat caller B?"), each cluster
+(donor) weighted equally; the cell-level medians and
 common-language effect sizes describe the benchmarked cell population, with
 cluster-robust uncertainty. Both are reported side by side.
 
@@ -130,8 +132,8 @@ Outputs (prefix = -o/--output)
 ==============================
 <prefix>.stats.pairwise.tsv    one row per comparison: inference level,
                                n_clusters / n_cells_paired, medians, median
-                               difference, W, two-sided P (cluster level by
-                               default), sign-test P, Holm-adjusted P,
+                               difference, W, two-sided P (donor/cluster level
+                               by default), sign-test P, Holm-adjusted P,
                                rank-biserial r, CL effect size, 95% CI,
                                naive per-cell P + rank-biserial, ICC, design
                                effect, effective n, P-inflation ratio, notes
@@ -148,10 +150,10 @@ Usage
 cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
     python bench_results/stat_tests.py -o ${BENCHMARK_RESULT_FILE_PREFIX}.stats \
     --reference ginkgo
-# ... with a coarser, donor-level sensitivity analysis:
+# ... with a finer, shared-material sensitivity analysis:
 cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
-    python bench_results/stat_tests.py -o ${PREFIX}.stats.donor \
-    --reference ginkgo --cluster-key donor,cellLine
+    python bench_results/stat_tests.py -o ${BENCHMARK_RESULT_FILE_PREFIX}.stats.fine \
+    --reference ginkgo --cluster-key accession_1,accession_2,cellLine
 
 # Fig. 3 (ploidy benchmark) statistics, on the balloon-plot table:
 python bench_results/stat_tests.py -i '*_pct_within_long.tsv' \
@@ -187,13 +189,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(level
 DEFAULT_CELL_KEY = ['accession_1', 'accession_2', 'cellLine',
                     'overall_ploidy', 'CNA_percent']
 
-# Default CLUSTER key (v2): the independent experimental unit. All cells with
-# the same (accession_1, accession_2, cellLine) are downsamplings of the same
-# two haplotype-normalized BAMs scored against the same COSMIC template, so
-# per-cell results of the same caller within such a group are correlated.
-# Pass --cluster-key donor,cellLine for a coarser donor-level sensitivity
+# Default CLUSTER key for Fig. 2 (v3): donor.  In the current benchmark all
+# simulated cells of one donor are downsamplings of that donor's haploid
+# material, so they are not independent draws and each human donor is one
+# effective sample.  (accession_1, accession_2, cellLine) identifies a single
+# simulated cell, not a reusable cluster, in the exported long TSV - each
+# accession-pair x template combination occurs once.  Pass
+# --cluster-key accession_1,accession_2,cellLine for a finer sensitivity
 # analysis, or --cluster-key none for the (discouraged) naive per-cell tests.
-DEFAULT_CLUSTER_KEY = ['accession_1', 'accession_2', 'cellLine']
+DEFAULT_CLUSTER_KEY = ['donor']
 
 # Fig. 3: columns tried, in order, to find the independent unit within each
 # plot group (first column with >= 2 distinct non-missing values wins; a
@@ -475,7 +479,7 @@ def mcnemar_exact(within_a, within_b):
     cells). Two-sided exact binomial on the discordant pairs.
     Returns dict(b, c, n_discordant, pvalue).
 
-    CAUTION (v2): like every per-cell test, this assumes independent cells;
+    CAUTION (v3): like every per-cell test, this assumes independent cells;
     with cells clustered by donor/material, aggregate the binary outcome per
     cluster (e.g. the majority/median outcome per donor) or restrict the test
     to cells of a single dataset before using it."""
@@ -571,8 +575,9 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
                      seed=1, cluster_key_str=''):
     """One pairwise-comparison record.
 
-    Primary inference on the CLUSTER level (per-cluster aggregation of the
-    per-cell differences), naive per-cell comparison kept for transparency.
+    Primary inference on the CLUSTER level (per-cluster/donor aggregation of
+    the per-cell differences), naive per-cell comparison kept for
+    transparency.
     x, y: paired per-cell (or per-dataset) values, equal length; labels:
     cluster id per element (None -> naive mode). base: dict with the identity
     columns (scenario/metric/caller_a/caller_b or plot/method_a/method_b).
@@ -681,8 +686,9 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
 
     df: long TSV dataframe (one row per caller per simulated cell);
     perf_metrics: metric ids; gamete_type2short: scenario prefix -> short tag;
-    cluster_key_cols: None -> DEFAULT_CLUSTER_KEY; [] -> naive per-cell mode;
-    a list -> custom cluster key (missing columns are dropped with a warning).
+    cluster_key_cols: None -> DEFAULT_CLUSTER_KEY (donor, i.e. each human
+    donor is one effective sample); [] -> naive per-cell mode; a list ->
+    custom cluster key (missing columns are dropped with a warning).
     Writes <out_prefix>.stats.{pairwise,friedman,concordance}.{tsv,json}.
     Returns the dict that is also written to .stats.json.
     """
@@ -710,7 +716,7 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                          or list(cluster_key_cols) != [])
     if cluster_key_cols is None:
         cluster_cols = list(DEFAULT_CLUSTER_KEY)
-        cluster_key_source = 'default (accession_1, accession_2, cellLine = shared BAMs + truth template)'
+        cluster_key_source = 'default (donor = independent human donor)'
     else:
         cluster_cols = list(cluster_key_cols)
         cluster_key_source = 'user-specified'
@@ -734,20 +740,22 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                    'per-cell metrics paired (blocked) by cell',
         'remaining_assumption_of_blocks': 'blocks (cells) mutually independent - '
                    'i.e. per-cell results of the SAME caller treated as independent',
-        'assumption_violation': 'cells sharing (accession_1, accession_2, cellLine) are '
-                   'downsamplings of the same two haplotype-normalized BAMs scored against '
-                   'the same COSMIC template; only nine donors and three templates feed all '
-                   '~1,989 cells, and ITH deletions are nested across CNA_percent, so '
-                   'same-caller results are positively correlated within clusters',
+        'assumption_violation': 'all ~1,989 cells are downsamplings of the haploid '
+                   'material of only NINE donors scored against three COSMIC templates; '
+                   'cells of one donor share that donor\'s BAM-derived noise and artifacts, '
+                   'and ITH deletions are nested across CNA_percent, so same-caller '
+                   'results are positively correlated within donors',
         'cluster_key': cluster_cols,
         'cluster_key_source': cluster_key_source,
-        'aggregation': F'per-cluster {cluster_agg} of the per-cell paired differences',
+        'aggregation': F'per-cluster {cluster_agg} of the per-cell paired '
+                       'differences (donor level by default)',
         'inference_level': ('cluster (independent experimental units)'
                             if can_cluster else
                             'cell (NAIVE - independence assumed; pseudoreplication risk)'),
         'primary_tests': ('two-sided Wilcoxon signed-rank + exact sign test on '
-                          'per-cluster medians; Friedman on per-cluster caller medians; '
-                          'Holm-Bonferroni on cluster-level P; cluster-bootstrap 95% CI'
+                          'per-independent-unit (donor by default) medians; Friedman '
+                          'on the same per-unit caller medians; Holm-Bonferroni on '
+                          'unit-level P; unit-cluster bootstrap 95% CI'
                           if can_cluster else
                           'two-sided Wilcoxon signed-rank per cell; Friedman per cell; '
                           'BCa 95% CI (all NAIVE)'),
@@ -757,8 +765,9 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
         'diagnostics': 'ICC(1,1) of the paired differences within clusters (one-way '
                        'ANOVA, method of moments); design effect DE = 1 + (m0-1)*ICC; '
                        'n_effective = n_cells / DE; p_inflation_ratio = cluster P / naive P',
-        'recommended_sensitivity': 'rerun with --cluster-key donor,cellLine (coarser, '
-                                   'donor-level) and compare the conclusions',
+        'recommended_sensitivity': 'rerun with --cluster-key '
+                                   'accession_1,accession_2,cellLine (finer, '
+                                   'shared-material level) and compare the conclusions',
     }
     if can_cluster:
         cid_counts = pd.Series(list(cell2cluster.values()), dtype=object).value_counts()
@@ -774,8 +783,8 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
     settings = {
         'analysis': 'scWGS CNV-caller benchmark (Fig. 2)',
         'design': ('randomized complete block; blocks = independent clusters '
-                   '(%s); per-cell metrics paired by cell and aggregated per '
-                   'cluster before testing' % cluster_key_str
+                   '(%s, donor by default); per-cell metrics paired by cell and '
+                   'aggregated per cluster (donor) before testing' % cluster_key_str
                    if can_cluster else
                    'randomized complete block; per-cell performances paired by '
                    'cell (NAIVE: cells treated as independent)'),
@@ -785,15 +794,17 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                         "('cluster' rows) and at the per-cell level "
                         "('cell (naive)' rows)",
         'posthoc_test': ('two-sided Wilcoxon signed-rank + exact sign test on '
-                         'per-cluster medians of the paired differences '
+                         'per-cluster (donor-level by default) medians of the '
+                         'paired differences '
                          "(zero_method='zsplit', continuity correction)"
                          if can_cluster else
                          "two-sided Wilcoxon signed-rank paired per cell "
                          "(zero_method='zsplit', continuity correction)"),
         'multiple_comparison_correction': 'Holm-Bonferroni within each (scenario, metric) '
-                        'family on the cluster-level P values (scenario-difference rows: '
+                        'family on the cluster-level (donor-level by default) P values '
+                        '(scenario-difference rows: '
                         'Holm within each (metric) family across callers)',
-        'effect_sizes': ['matched-pairs rank-biserial r (cluster level)',
+        'effect_sizes': ['matched-pairs rank-biserial r (cluster/donor level)',
                          'paired common-language effect size (cell population)',
                          'median per-cell difference with cluster-bootstrap 95% CI'],
         'tail': 'two-sided (two-tailed) for all tests',
@@ -1221,11 +1232,12 @@ def main(argv=None):
     parser.add_argument('--cluster-key', default=None,
                         help='Comma-separated columns defining the independent '
                              'experimental unit (cluster). Fig. 2 default: '
-                             'accession_1,accession_2,cellLine (the shared BAMs + '
-                             'truth template); Fig. 3 default chain: donor -> '
-                             'cellLine -> dataset. Pass "none" to disable clustering '
-                             'and revert to the naive per-cell/per-dataset tests '
-                             '(discouraged: pseudoreplication).')
+                             'donor (each human donor is one effective sample; '
+                             'per-cell results of the same donor are aggregated '
+                             'to a median before testing); Fig. 3 default chain: '
+                             'donor -> cellLine -> dataset. Pass "none" to disable '
+                             'clustering and revert to the naive per-cell/per-dataset '
+                             'tests (discouraged: pseudoreplication).')
     parser.add_argument('--cluster-agg', choices=['median', 'mean'], default='median',
                         help='Aggregation of per-cell/per-dataset differences within '
                              'each cluster (default median).')

@@ -35,8 +35,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(level
 # This block turns the important part of that file -- the pairwise rows of the
 # two ground-truth scenarios (scenario in {Hap_0, Hap_1}) restricted to the
 # columns (scenario, metric, caller_a, caller_b, pvalue_holm) -- into a
-# copy-paste-ready booktabs LaTeX table, with the scenario column relabelled
-# 'Ground-truth derivation' and the table caption (legend) filled in.
+# copy-paste-ready booktabs LaTeX table.  [REV v3] The table is pivoted: each
+# row is one (metric, caller_b) pair and the two numeric columns hold the
+# Holm-adjusted P values for Hap_0 and Hap_1 respectively, so the two
+# ground-truth scenarios can be compared side by side.  With --stats-all-pairs
+# a Caller-$a$ column is added to identify the pair.
 # [REV] By default the same table is ALSO written to
 # <output>.stats.pairwise.tex after every successful stats run
 # (--no-latex-table disables this); --latex-table additionally prints it to
@@ -72,12 +75,12 @@ def _perf_legend(ref_desc, ref_is_constant_column=True):
                   F'($a$; see the Caller $a$ column, {ref_desc} by default)')
     return (
         'Pairwise comparison of CNV-calling performance between the reference caller '
-        F'{ref_clause} and each other caller ($b$), stratified by ground-truth derivation. '
+        F'{ref_clause} and each other caller ($b$). '
         'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
         'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
         '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
         'from the pre-simulated data (Fig.~1a). $p$ values are two-sided Wilcoxon '
-        'signed-rank tests on per-cluster medians of the paired per-cell differences '
+        'signed-rank tests on per-donor medians of the paired per-cell differences '
         '(reference vs.\\ caller $b$), Holm--Bonferroni-adjusted within each (scenario, '
         'metric) family; bold values are significant at the 0.05 family-wise level. '
         'CN, copy number.'
@@ -122,15 +125,13 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
                        table_label='tab:pairwise', alpha=0.05):
     """Build the booktabs LaTeX table from a *.stats.pairwise.tsv file.
 
-    Only the pairwise rows of the two ground-truth scenarios (scenario in
-    {Hap_0, Hap_1}) are kept, restricted to the columns (scenario, metric,
-    caller_a, caller_b, pvalue_holm); the scenario column is relabelled
-    'Ground-truth derivation'.  [FIX] The P-value column is 'pvalue_holm'
-    (as written by stat_tests.py), not 'p_value_holm'.  With
+    [REV v3] Only the pairwise rows of the two ground-truth scenarios
+    (scenario in {Hap_0, Hap_1}) are kept.  The table is pivoted so that each
+    row is one (metric, caller_b) pair and the two numeric columns hold the
+    Holm-adjusted P values for Hap_0 and Hap_1 respectively.  With
     --stats-all-pairs the compared pairs are not all referenced to one caller,
-    so the constant-Caller-$a$ column is only omitted when a single reference
-    caller is actually present.  Returns the list of table lines, or None on
-    any problem (a reason is logged).
+    so a Caller-$a$ column is added to identify pairs.  Returns the list of
+    table lines, or None on any problem (a reason is logged).
     """
     if not os.path.isfile(tsv_path):
         logging.error('pairwise stats file not found: %s', tsv_path)
@@ -147,28 +148,42 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
         logging.error('no rows with scenario in {Hap_0, Hap_1} in %s', tsv_path)
         return None
     sub = sub.dropna(subset=['scenario', 'metric', 'caller_b'])
-    # Row order: Hap_0 first, then Hap_1 (as in the main figures); metrics and
-    # compared callers keep their order of first appearance in the input file.
-    scenario_order = ['Hap_0', 'Hap_1']
-    metric_order = list(dict.fromkeys(sub['metric'].tolist()))
-    caller_order = list(dict.fromkeys(sub['caller_b'].tolist()))
-    sub['scenario'] = pd.Categorical(sub['scenario'], categories=scenario_order, ordered=True)
-    sub['metric'] = pd.Categorical(sub['metric'], categories=metric_order, ordered=True)
-    sub['caller_b'] = pd.Categorical(sub['caller_b'], categories=caller_order, ordered=True)
-    sub = sub.sort_values(['scenario', 'metric', 'caller_b'])
-
+    # Row order: metrics and compared callers keep their order of first
+    # appearance in the Hap_0 rows (as in the main figures); fall back to the
+    # full file if a scenario is missing.
+    hap0 = sub.loc[sub['scenario'] == 'Hap_0']
+    metric_order = list(dict.fromkeys(hap0['metric'].tolist())) or list(dict.fromkeys(sub['metric'].tolist()))
+    caller_order = list(dict.fromkeys(hap0['caller_b'].tolist())) or list(dict.fromkeys(sub['caller_b'].tolist()))
     # With one fixed reference the Caller $a$ column is redundant (it goes
     # into the caption); with --stats-all-pairs it is needed to identify pairs.
     ref_callers = list(dict.fromkeys(sub['caller_a'].tolist())) if 'caller_a' in sub.columns else []
     show_caller_a = len(ref_callers) > 1
+    # ---- pivot: one row per (metric, [caller_a,] caller_b), cols = scenario ----
+    index_cols = ['metric', 'caller_a', 'caller_b'] if show_caller_a else ['metric', 'caller_b']
+    piv = sub.pivot_table(index=index_cols, columns='scenario',
+                          values='pvalue_holm', aggfunc='first')
+    for sc in ('Hap_0', 'Hap_1'):
+        if sc not in piv.columns:
+            piv[sc] = float('nan')
+    piv = piv[['Hap_0', 'Hap_1']].reset_index()
+    piv['metric'] = pd.Categorical(piv['metric'], categories=metric_order, ordered=True)
+    piv['caller_b'] = pd.Categorical(piv['caller_b'], categories=caller_order, ordered=True)
+    if show_caller_a:
+        caller_a_order = list(dict.fromkeys(sub['caller_a'].tolist()))
+        piv['caller_a'] = pd.Categorical(piv['caller_a'], categories=caller_a_order, ordered=True)
+        piv = piv.sort_values(['metric', 'caller_a', 'caller_b'])
+    else:
+        piv = piv.sort_values(['metric', 'caller_b'])
     ref_desc = _format_reference(reference)
     legend = _perf_legend(ref_desc, ref_is_constant_column=not show_caller_a)
-    header = (('Ground-truth derivation & Metric & Caller $a$ & Caller $b$ '
-               '& Holm-adjusted $p$ \\\\')
-              if show_caller_a else
-              ('Ground-truth derivation & Metric & Caller $b$ '
-               '& Holm-adjusted $p$ \\\\'))
-    colspec = 'llllr' if show_caller_a else 'lllr'
+    if show_caller_a:
+        header = ('Metric & Caller $a$ & Caller $b$ '
+                  '& Hap\\_0 Holm $p$ & Hap\\_1 Holm $p$ \\\\')
+        colspec = 'llrrr'
+    else:
+        header = ('Metric & Caller $b$ '
+                  '& Hap\\_0 Holm $p$ & Hap\\_1 Holm $p$ \\\\')
+        colspec = 'llrr'
     lines = [
         F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
         '(requires \\usepackage{booktabs})',
@@ -181,15 +196,18 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
         F'    {header}',
         '    \\midrule',
     ]
-    for rec in sub.itertuples(index=False):
-        p_cell = _fmt_pvalue_holm(rec.pvalue_holm, alpha=alpha)
+    for rec in piv.itertuples(index=False):
+        p_hap0 = _fmt_pvalue_holm(rec.Hap_0, alpha=alpha)
+        p_hap1 = _fmt_pvalue_holm(rec.Hap_1, alpha=alpha)
         if show_caller_a:
-            lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
-                         F'& {_tex_escape(rec.caller_a)} & {_tex_escape(rec.caller_b)} '
-                         F'& {p_cell} \\\\')
+            lines.append(F'    {_tex_escape(rec.metric)} '
+                         F'& {_tex_escape(rec.caller_a)} '
+                         F'& {_tex_escape(rec.caller_b)} '
+                         F'& {p_hap0} & {p_hap1} \\\\')
         else:
-            lines.append(F'    {_tex_escape(rec.scenario)} & {_tex_escape(rec.metric)} '
-                         F'& {_tex_escape(rec.caller_b)} & {p_cell} \\\\')
+            lines.append(F'    {_tex_escape(rec.metric)} '
+                         F'& {_tex_escape(rec.caller_b)} '
+                         F'& {p_hap0} & {p_hap1} \\\\')
     lines += [
         '    \\bottomrule',
         '  \\end{tabular}',
@@ -258,21 +276,27 @@ parser1.add_argument('--stats-alpha', type=float, default=0.05, metavar='ALPHA',
 parser1.add_argument('--stats-pair-key', default=None, metavar='COLS',
                     help='Comma-separated columns identifying one simulated cell '
                          '(default: accession_1,accession_2,cellLine,overall_ploidy,CNA_percent).')
-# [REV v2] cluster (independent-experimental-unit) options: per-cell results of the
-# same caller are correlated within (accession_1, accession_2, cellLine) groups, so
-# inference is aggregated to the cluster level by default (see stat_tests.py).
-# [FIX] The default was 'donor' in the code while the documentation (this help
-# text, the module comments and README.md) all specified the stat_tests module
-# default accession_1,accession_2,cellLine; the code now matches the docs
-# (default None -> stat_tests.DEFAULT_CLUSTER_KEY).
-parser1.add_argument('--stats-cluster-key', default=None, metavar='COLS',
+# [REV v3] cluster (independent-experimental-unit) options: per-cell results of
+# the same caller are correlated within donor groups (all ~1,989 simulated cells
+# derive from only nine donors), so inference is aggregated to the per-donor
+# level by default: each donor is one effective sample, and the per-cell
+# differences within a donor are aggregated to a median before the Wilcoxon
+# signed-rank test.  This avoids the pseudoreplication that arises from treating
+# every cell as independent (see stat_tests.py for the full rationale and the
+# ICC / design-effect diagnostics).
+# Finer keys (e.g. accession_1,accession_2,cellLine) are available as a
+# sensitivity analysis; pass "none" to revert to the naive per-cell tests.
+parser1.add_argument('--stats-cluster-key', default='donor', metavar='COLS',
                     help='Comma-separated columns defining the independent experimental '
-                         'unit (cluster) for the statistical tests. Default: '
-                         'accession_1,accession_2,cellLine (the shared haplotype BAMs + '
-                         'truth template; stat_tests.DEFAULT_CLUSTER_KEY). Recommended '
-                         'sensitivity analysis: --stats-cluster-key donor,cellLine. '
+                         'unit (cluster) for the statistical tests. Default: donor '
+                         '(each human donor is one effective sample; per-cell results '
+                         'of the same donor are aggregated to a median before testing). '
+                         'Finer sensitivity analysis: '
+                         '--stats-cluster-key accession_1,accession_2,cellLine '
+                         '(shared-material cells; in the current long TSV this '
+                         'key is finer than the donor-level default). '
                          'Pass "none" to revert to the naive per-cell tests that treat '
-                         'every cell as independent.')
+                         'every cell as independent (discouraged: pseudoreplication).')
 parser1.add_argument('--stats-no-cluster', action='store_true', default=False,
                     help='Alias of --stats-cluster-key none (discouraged: '
                          'pseudoreplication; per-cell results of the same caller are '
@@ -287,9 +311,9 @@ parser1.add_argument('--no-latex-table', dest='latex_table_auto',
 parser1.add_argument('--latex-table', action='store_true', default=False,
                     help='Print the booktabs LaTeX table built from the existing '
                          '<output>.stats.pairwise.tsv (rows with scenario in '
-                         '{Hap_0, Hap_1}; columns scenario, metric, caller_b, '
-                         'pvalue_holm; scenario relabelled "Ground-truth '
-                         'derivation") to stdout and exit, before reading stdin.')
+                         '{Hap_0, Hap_1}; pivoted to one row per (metric, caller_b) '
+                         'with two Holm-adjusted $p$ columns, Hap_0 and Hap_1) '
+                         'to stdout and exit, before reading stdin.')
 
 args = parser1.parse_args()
 
@@ -465,27 +489,30 @@ THE_FIG_TITLE = 'scWGS CNV caller performance across simulated cells, callers, a
 
 
 # --------------------------------------------------------------------------- #
-# [REV v2] Statistical tests (cluster-robust)                                  #
+# [REV v3] Statistical tests (donor-level, cluster-robust)                    #
 # --------------------------------------------------------------------------- #
 # Every caller is evaluated on the SAME simulated cells, so per-cell metrics are
 # paired (blocked) by cell: this handles the correlation ACROSS CALLERS within a
 # cell.  What a block design additionally assumes is that the BLOCKS (cells) are
 # mutually independent - i.e. that the many per-cell results produced by the SAME
 # caller are independent.  That assumption is questionable here: all cells are
-# downsamplings of the haplotype-normalized BAMs of only nine donors scored
+# downsamplings of the haplotype-normalized BAMs of only NINE donors scored
 # against three COSMIC templates, so per-cell differences are correlated within
-# (accession_1, accession_2, cellLine) groups (and the ITH deletions are nested
-# across CNA_percent).  Treating ~1,989 cells as ~1,989 independent observations is
-# pseudoreplication: the design effect 1 + (m-1)*ICC inflates the test statistics
-# and shrinks the P values (see bench_results/test_stat_tests.py,
-# demo_independence_failure, for a measured demonstration).
+# donor groups (and the ITH deletions are nested across CNA_percent).  Treating
+# ~1,989 cells as ~1,989 independent observations is pseudoreplication: the
+# design effect 1 + (m-1)*ICC inflates the test statistics and shrinks the P
+# values (see bench_results/test_stat_tests.py, demo_independence_failure, for a
+# measured demonstration).
 #
-# The tests therefore run at the CLUSTER level by default (per-cluster medians of
-# the per-cell differences as the units of the Wilcoxon signed-rank and exact sign
-# tests; Friedman on per-cluster caller medians; Holm on cluster-level P; cluster
-# bootstrap CIs; ICC / design-effect / effective-n diagnostics per comparison),
-# while the per-cell quantities remain in the outputs as descriptive statistics
-# and as flagged naive comparisons (pvalue_cell_naive).
+# [REV v3] The tests therefore run at the DONOR level by default (each donor is
+# one effective sample): per-donor medians of the per-cell differences are the
+# units of the Wilcoxon signed-rank and exact sign tests; Friedman on per-donor
+# caller medians; Holm on donor-level P; cluster bootstrap CIs; ICC /
+# design-effect / effective-n diagnostics per comparison.  The per-cell
+# quantities remain in the outputs as descriptive statistics and as flagged
+# naive comparisons (pvalue_cell_naive).  Finer cluster keys
+# (--stats-cluster-key accession_1,accession_2,cellLine) are available as a
+# sensitivity analysis.
 # Exact P values, effect sizes and CIs land in:
 #   <output>.stats.pairwise.tsv, <output>.stats.friedman.tsv,
 #   <output>.stats.concordance.tsv, <output>.stats.json
@@ -499,7 +526,7 @@ if args.stats:
         elif args.stats_cluster_key:
             _stats_cluster_key = [c.strip() for c in args.stats_cluster_key.split(',') if c.strip()]
         else:
-            _stats_cluster_key = None        # module default: accession_1, accession_2, cellLine
+            _stats_cluster_key = None        # module default: donor
         logging.info('running statistical tests (reference caller: %s, cluster key: %s) ...',
                      args.stats_reference,
                      'none (NAIVE per-cell)' if _stats_cluster_key == []
@@ -1043,5 +1070,3 @@ with PdfPages(args.output + '-all.pdf') as pdf:
                 for page_num, feature_withscale in enumerate(continuous_features + categorical_features)]):
             pdf.savefig(fig1, bbox_inches='tight', dpi=75)
             plt.close(fig1)
-  
-
