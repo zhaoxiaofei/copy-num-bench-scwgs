@@ -42,10 +42,10 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm, to_hex
 
 import seaborn as sns
-from scipy.cluster.hierarchy import leaves_list, linkage
+from scipy.cluster.hierarchy import fcluster, leaves_list, linkage
 from scipy.spatial.distance import pdist, squareform
 
 try:
@@ -62,6 +62,85 @@ CHROM_SET = set(CHROM_ORDER)
 def eprint(msg: str) -> None:
     sys.stderr.write(str(msg) + "\n")
     sys.stderr.flush()
+
+
+# Display names of the benchmarked callers, spelled as in the manuscript.  The callers
+# of this script describe a figure with separate options --tool / --donor /
+# --sample-type / --avg-spot-len / --title-suffix instead of pre-joining them into one
+# title string, and compose_title() prints the caller only, so the published figure
+# never shows the internal key=value metadata or the "avgSpotLen=nan" placeholder
+# (finding F-004).
+TOOL_DISPLAY_NAMES = {
+    'aneufinder': 'AneuFinder',
+    'flcna'     : 'FLCNA',
+    'chisel'    : 'CHISEL',
+    'copynumber': 'Copynumber',
+    'ginkgo'    : 'Ginkgo',
+    'hmmcopy'   : 'HMMcopy',
+    'sccnv'     : 'SCCNV',
+    'secnv'     : 'SeCNV',
+    'scyn'      : 'SCYN',
+    'scabsolute': 'scAbsolute',
+}
+
+# Row-annotation (cluster) colour bar.  The CN scale runs dark blue (CN=0) -> white
+# (CN=2) -> dark red (CN>=3), so the annotation palette deliberately uses only green,
+# brown, grey, olive, amber, magenta and black hues: a cluster swatch can never be
+# mistaken for a copy-number value (finding F-042).  The label of the colour bar is
+# slanted and tinted for the same reason.
+CLUSTER_COLORS = (
+    "#1b7837",   # dark green
+    "#8c510a",   # brown
+    "#4d4d4d",   # dark grey
+    "#66a61e",   # olive
+    "#e08214",   # amber
+    "#000000",   # black
+    "#c51b7d",   # magenta
+    "#762a83",   # purple
+)
+ANNOTATION_LABEL_COLOUR = "#6a3d9a"
+
+
+def display_name(tool) -> str:
+    """Manuscript spelling of a caller key (e.g. 'ginkgo' -> 'Ginkgo')."""
+    return TOOL_DISPLAY_NAMES.get(str(tool).lower(), str(tool))
+
+
+def tidy_title(title: str) -> str:
+    """Clean an explicit --title string: caller spelling, no key=value metadata.
+
+    Kept for backwards compatibility with already-generated pipeline scripts, which
+    pass --title "ginkgo | donor=... sampleType=... avgSpotLen=nan".
+    """
+    fields = [f.strip() for f in str(title).split("|")]
+    if len(fields) > 1:
+        # Pipeline-style title: "<caller> | donor=... sampleType=... avgSpotLen=..."
+        fields = [f for f in fields if "=" not in f]
+    fields = [f for f in fields if f]
+    if not fields:
+        return ""
+    fields[0] = display_name(fields[0])
+    return " | ".join(fields)
+
+
+def compose_title(args) -> str:
+    """Visible figure title, built from the structured options (finding F-004)."""
+    if args.title:
+        return tidy_title(args.title)
+    title = display_name(args.tool) if args.tool else ""
+    if args.title_suffix:
+        title = F'{title} | {args.title_suffix}' if title else args.title_suffix
+    return title
+
+
+def title_provenance(args) -> str:
+    """'tool=... donor=... sampleType=... avgSpotLen=...' for the PDF metadata."""
+    return " ".join(
+        F"{key}={value}" for key, value in (
+            ("tool", args.tool), ("donor", args.donor),
+            ("sampleType", args.sample_type), ("avgSpotLen", args.avg_spot_len),
+        ) if value
+    )
 
 
 def chrom_sort_key(chrom: str) -> int:
@@ -628,7 +707,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("-i", "--input", nargs="+", required=True,
                    help="BED files or shell-style glob patterns")
     p.add_argument("-o", "--output-prefix", required=True)
-    p.add_argument("--title", default="")
+
+    # Figure title (finding F-004): the caller describes the figure with separate
+    # options instead of one pre-joined "caller | donor=... avgSpotLen=nan" string, and
+    # only the caller name is printed.
+    p.add_argument("--tool", default="",
+                   help="Caller key (e.g. 'ginkgo'); the figure title shows its "
+                        "manuscript spelling (e.g. 'Ginkgo')")
+    p.add_argument("--donor", default="",
+                   help="Sample metadata, stored in the PDF metadata only "
+                        "(never printed in the figure title)")
+    p.add_argument("--sample-type", default="",
+                   help="Sample metadata, stored in the PDF metadata only")
+    p.add_argument("--avg-spot-len", default="",
+                   help="Sample metadata, stored in the PDF metadata only; missing "
+                        "values (e.g. 'nan') are never printed")
+    p.add_argument("--title-suffix", default="",
+                   help="Free-text suffix appended to the caller name (e.g. 'relative')")
+    p.add_argument("--title", default="",
+                   help="Explicit figure title; overrides --tool/--title-suffix.  The "
+                        "legacy 'caller | donor=... sampleType=... avgSpotLen=nan' form "
+                        "is accepted and cleaned")
 
     p.add_argument(
         "--by-chrom",
@@ -667,6 +766,27 @@ def parse_args() -> argparse.Namespace:
         choices=[0, 1],
         default=1,
         help="Show sample names on the heatmap y-axis.",
+    )
+    p.add_argument(
+        "--max-inline-labels",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Draw the per-row sample labels only when the heatmap has at most N rows. "
+             "0 (default) always draws them: above the 5-7 pt print minimum they are not "
+             "legible on paper, but they stay in the vector figure for zoomed-in "
+             "per-cell scrutiny (e.g. reading individual SRR accessions). Set N>0 to "
+             "hide them above that many rows instead.",
+    )
+    p.add_argument(
+        "--cluster-annotation",
+        type=int,
+        default=3,
+        metavar="K",
+        help="Cut the row dendrogram into K clusters, draw them as a colour bar next to "
+             "the heatmap (with or without the sample labels) and write the "
+             "sample-to-cluster mapping to <output-prefix>.cluster_membership.tsv. "
+             "Use 0 to disable.",
     )
 
     # Clustering controls.
@@ -988,8 +1108,22 @@ def main() -> None:
             raise ValueError("Integer copy-number mode requires integer --vmin and --vmax values.")
 
         n_levels = int_vmax - int_vmin + 1
-        base = plt.get_cmap(args.cmap, n_levels)
-        discrete_cmap = ListedColormap([base(i) for i in range(n_levels)])
+        # The diverging palette is centred on the diploid value (--center, 2 by default)
+        # rather than on the middle of the [vmin, vmax] range, so that white denotes
+        # CN=2, losses fall on the blue half and gains on the red half.
+        base = plt.get_cmap(args.cmap)
+        centre = float(args.center)
+        if int_vmin < centre < int_vmax:
+            palette_norm = TwoSlopeNorm(vmin=float(int_vmin), vcenter=centre,
+                                        vmax=float(int_vmax))
+            positions = [palette_norm(cn) for cn in range(int_vmin, int_vmax + 1)]
+            eprint(F"Integer CN palette centred at CN={centre:g} (white = CN={centre:g})")
+        else:
+            positions = np.linspace(0.0, 1.0, n_levels)
+        discrete_cmap = ListedColormap([base(pos) for pos in positions])
+        eprint("Integer CN palette: " + ", ".join(
+            F"CN{cn}={to_hex(discrete_cmap.colors[i])}"
+            for i, cn in enumerate(range(int_vmin, int_vmax + 1))))
         heatmap_norm = BoundaryNorm(
             np.arange(int_vmin - 0.5, int_vmax + 1.5, 1.0),
             discrete_cmap.N,
@@ -1011,7 +1145,43 @@ def main() -> None:
     )
     eprint(f"figsize={figsize}")
 
-    if args.show_sample_labels and mat.shape[0] > 500:
+    # Finding F-042: the per-sample y-axis labels drop below the 5-7 pt print minimum
+    # once a large heatmap is placed at print size, so a cluster-annotation colour bar
+    # is drawn next to the heatmap and the sample-to-cluster mapping is exported for
+    # the SI.  The accession labels themselves are kept by default (--max-inline-labels
+    # 0), because they remain useful for zoomed-in, per-cell scrutiny.
+    show_sample_labels = bool(args.show_sample_labels)
+    if show_sample_labels and args.max_inline_labels > 0 and mat.shape[0] > args.max_inline_labels:
+        eprint(
+            f"{mat.shape[0]} samples > --max-inline-labels={args.max_inline_labels}: the "
+            "per-sample y-axis labels would be illegible at print size, so they are "
+            "hidden; the cluster-annotation colour bar and the mapping written to "
+            "<output-prefix>.cluster_membership.tsv remain."
+        )
+        show_sample_labels = False
+
+    row_colors = None
+    if args.cluster_annotation > 1:
+        row_clusters = fcluster(row_Z, t=args.cluster_annotation, criterion="maxclust")
+        palette = [CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
+                   for i in range(args.cluster_annotation)]
+        membership_path = args.output_prefix + ".cluster_membership.tsv"
+        # Sorted by cluster so the supplementary mapping table is easy to read.
+        pd.DataFrame(
+            {"sample": list(mat.index), "cluster": row_clusters}
+        ).sort_values(["cluster", "sample"]).to_csv(membership_path, sep="\t", index=False)
+        eprint(F"Sample-to-cluster mapping written to {membership_path}; cluster colours "
+               F"{', '.join(palette)}")
+        row_colors = pd.DataFrame(
+            {
+                f"k={args.cluster_annotation} clusters": [
+                    palette[(int(c) - 1) % len(palette)] for c in row_clusters
+                ]
+            },
+            index=mat.index,
+        )
+
+    if show_sample_labels and mat.shape[0] > 500:
         eprint(
             "Warning: >500 cells with sample labels may be visually crowded and slow to render. "
             "Use --show-sample-labels 0 for a cleaner/faster figure."
@@ -1030,13 +1200,30 @@ def main() -> None:
         center=heatmap_center,
         figsize=figsize,
         cbar_kws=cbar_kws,
+        row_colors=row_colors,
         xticklabels=False,
-        yticklabels=bool(args.show_sample_labels),
+        yticklabels=show_sample_labels,
         dendrogram_ratio=(0.15, 0.055),
     )
 
     g.ax_cbar.set_position([0.25, 0.98, 0.5, 0.01])
     g.ax_cbar.tick_params(axis="x", length=3)
+
+    # The row-annotation label (e.g. "k=3 clusters") used to be the 90-degree tick label
+    # of the annotation strip, which printed it vertically and reserved a tall blank band
+    # under the heatmap.  It is now a horizontal title above the strip, still slanted and
+    # tinted so it reads as an annotation of the cells rather than as part of the
+    # copy-number colour scale.
+    if row_colors is not None:
+        ax_annotation = getattr(g, "ax_row_colors", None)
+        if ax_annotation is not None:
+            annotation_label = str(row_colors.columns[0])
+            ax_annotation.set_xticklabels([])
+            ax_annotation.tick_params(axis="x", length=0)
+            ax_annotation.set_title(annotation_label, loc="left", pad=2, fontsize=7.5,
+                                    fontstyle="italic", color=ANNOTATION_LABEL_COLOUR)
+            eprint(F"Annotation label {annotation_label!r}: horizontal title above the "
+                   F"colour bar, italic, colour {ANNOTATION_LABEL_COLOUR}")
 
     ax = g.ax_heatmap
     ax.set_xlabel("")
@@ -1065,13 +1252,30 @@ def main() -> None:
     ax.set_xticklabels(labels, rotation=15, fontsize=8)
     ax.tick_params(axis="x", length=0)
 
-    if args.show_sample_labels:
-        plt.setp(ax.get_yticklabels(), rotation=0, fontsize=6)
+    if show_sample_labels:
+        # The per-cell labels are kept for zoomed-in scrutiny of individual accessions
+        # even though they fall below the 5-7 pt print minimum; shrink them so that
+        # neighbouring rows do not overprint each other at this figure height.
+        panel_pt = figsize[1] * 72.0 * 0.75         # usable height of the heatmap panel
+        label_pt = float(np.clip(0.8 * panel_pt / max(mat.shape[0], 1), 2.5, 6.0))
+        plt.setp(ax.get_yticklabels(), rotation=0, fontsize=label_pt)
+        eprint(F"Sample labels: {mat.shape[0]} row(s) at {label_pt:.1f} pt")
 
-    if args.title:
-        g.fig.suptitle(args.title, y=1.02)
+    figure_title = compose_title(args)
+    if args.title and figure_title != args.title:
+        eprint(F"--title cleaned for the figure: {args.title!r} -> {figure_title!r}")
+    if figure_title:
+        g.fig.suptitle(figure_title, y=1.02)
 
-    g.savefig(args.output_prefix + ".pdf", bbox_inches="tight")
+    # The sample metadata is kept as figure provenance instead of being printed.
+    pdf_metadata = {"Title": figure_title} if figure_title else {}
+    provenance = title_provenance(args)
+    if provenance:
+        pdf_metadata["Subject"] = provenance
+        eprint(F"figure title {figure_title!r}; metadata {provenance!r}")
+
+    g.savefig(args.output_prefix + ".pdf", bbox_inches="tight",
+              metadata=pdf_metadata or None)
     g.savefig(args.output_prefix + ".png", dpi=args.png_dpi, bbox_inches="tight")
     plt.close("all")
 
@@ -1082,10 +1286,10 @@ def main() -> None:
         f"  {args.output_prefix}.png\n"
         f"  {args.output_prefix}.linkage.tsv\n"
         f"  {args.output_prefix}.cluster_order.tsv"
+        + (f"\n  {args.output_prefix}.cluster_membership.tsv" if row_colors is not None else "")
         + (f"\n  {args.output_prefix}.cnv_distance.tsv.gz" if args.save_distance_matrix else "")
     )
 
 
 if __name__ == "__main__":
     main()
-

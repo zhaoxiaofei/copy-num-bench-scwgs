@@ -48,7 +48,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(level
 _CALLER_DISPLAY = {
     'aneufinder': 'AneuFinder',
     'flcna'     : 'FLCNA',
-    'chisel'    : 'Chisel',
+    'chisel'    : 'CHISEL',
     'copynumber': 'Copynumber',
     'ginkgo'    : 'Ginkgo',
     'hmmcopy'   : 'HMMcopy',
@@ -329,8 +329,8 @@ if args.latex_table:
 '''
     'aneufinder': 'AneuFinder  Genome Biology               2016',
     'flcna'     : 'FLCNA       Genome Research              2024',
-    'chisel'    : 'Chisel      Nature Biotechnology         2021',
-    'copynumber': 'CopyNumber  BMC Genomics                 2012',
+    'chisel'    : 'CHISEL      Nature Biotechnology         2021',
+    'copynumber': 'Copynumber  BMC Genomics                 2012',
     'ginkgo'    : 'Ginkgo      Nature Methods               2015',
     'hmmcopy'   : 'HMMcopy     Bioinformatics               2006',
     'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
@@ -341,7 +341,7 @@ if args.latex_table:
 caller2desc = {
     'aneufinder': 'AneuFinder',
     'flcna'     : 'FLCNA',
-    'chisel'    : 'Chisel',
+    'chisel'    : 'CHISEL',
     'copynumber': 'Copynumber',
     'ginkgo'    : 'Ginkgo',
     'hmmcopy'   : 'HMMcopy',
@@ -627,7 +627,7 @@ BOUNDED_PERF_METRIC_RANGES = {
 
 
 def swarm_grid_canvas(n_rows, n_cols, panel_w=1.1, min_panel_h=1.0, max_panel_h=4.0,
-                      legend_h=1.0, label_pad_left=1.8, label_pad_top=0.62):
+                      legend_h=1.3, label_pad_left=1.8, label_pad_top=0.62):
     """[STYLE] Square canvas with fixed absolute-inch zones, reproducing the
     layout machinery of the reference metric-by-method grid figure: row labels
     on the left (label_pad_left), column labels on top (label_pad_top), a
@@ -640,7 +640,10 @@ def swarm_grid_canvas(n_rows, n_cols, panel_w=1.1, min_panel_h=1.0, max_panel_h=
     between the grid and the boxed legend below it: label_pad_top fits the
     column titles plus the row of scenario-median numbers that sit just
     above the first-row panels, and legend_h fits the boxed titled legend
-    plus the one-line abbreviation note. Returns (fig, gridspec,
+    plus the two-line abbreviation note.  [FIX] legend_h was raised from 1.0
+    in to 1.3 in: the boxed legend has to sit high enough for the note under
+    it to clear its lower frame edge, while still leaving a gap to the
+    bottom-row caller labels of the grid.  Returns (fig, gridspec,
     canvas_side_inch).
 
     NOTE: figures built on this canvas must be saved WITHOUT
@@ -719,12 +722,17 @@ def add_bottom_legend(fig, handles, side, ncol, fontsize=8.5):
     margin above the absolute figure bottom edge (inside the legend_h zone
     reserved by swarm_grid_canvas). [FIX] The legend now carries its name
     ('Ground-truth derivation') as the legend title and is drawn in a thin
-    box, with the title centred over the entries."""
+    box, with the title centred over the entries.
+    [FIX] The anchor was raised from 0.27 in to 0.46 in: the abbreviation note
+    printed below the legend (add_bottom_note) keeps its place, and the legend box
+    used to touch -- and slightly overlap -- that note. The legend zone reserved by
+    swarm_grid_canvas (1.3 in) has room for the raised legend plus the note without
+    touching the bottom-row caller labels of the grid."""
     leg = fig.legend(handles=handles, loc='lower center', ncol=ncol,
                      fontsize=fontsize, title=the_gamete_legend_title,
                      title_fontsize=fontsize, frameon=True, fancybox=False,
                      framealpha=1.0, edgecolor='0.65', borderpad=0.5,
-                     bbox_to_anchor=(0.5, 0.27 / side),
+                     bbox_to_anchor=(0.5, 0.46 / side),
                      columnspacing=1.6, handlelength=1.4, handletextpad=0.5)
     try:  # centre the title over the entries (matplotlib keeps this private)
         leg._legend_box.align = 'center'
@@ -898,16 +906,20 @@ def plot_main():
     # reference figure (callers laid out over two rows, 5 + 4); margins are set
     # manually so the legend and the abbreviation note get a dedicated strip
     # at the bottom, mirroring the reference figure's fixed-zone layout.
-    fig.subplots_adjust(left=0.07, right=0.985, top=0.915, bottom=0.15)
+    # [FIX] bottom margin raised from 0.15 to 0.20: the legend moved up (see below), so
+    # the panel x tick labels need to stay clear of its upper frame edge as well.
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.915, bottom=0.20)
     add_fig_title(fig)
     caller_handles = caller_legend_handles(caller_order)
     fig.legend(handles=caller_handles, loc='lower center', ncol=5,
                fontsize=8.5, frameon=True, fancybox=False,
                framealpha=1.0, edgecolor='0.65', borderpad=0.5,
-               bbox_to_anchor=(0.5, 0.022),
+               # [FIX] raised from 0.022 so the abbreviation note below cannot touch
+               # the legend frame (same overlap as in the final-grid figure).
+               bbox_to_anchor=(0.5, 0.045),
                columnspacing=1.8, handlelength=1.4, handletextpad=0.5)
     if SHOW_ABBREV_FOOTNOTE:
-        fig.text(0.5, 0.006, THE_ABBREV_NOTE, ha='center', va='bottom',
+        fig.text(0.5, 0.008, THE_ABBREV_NOTE, ha='center', va='bottom',
                  fontsize=7.5, color='0.25')
     plt.savefig(args.output + '_main.pdf')
     plt.savefig(args.output + '_main.png', dpi=300)

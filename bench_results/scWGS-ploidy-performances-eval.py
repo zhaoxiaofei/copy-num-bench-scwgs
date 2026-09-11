@@ -173,7 +173,7 @@ TOOL_PRETTY = {
     'aneufinder': 'AneuFinder',
     'flcna': 'FLCNA',
     'chisel': 'CHISEL',
-    'copynumber': 'CopyNumber',
+    'copynumber': 'Copynumber',
     'ginkgo': 'Ginkgo',
     'hmmcopy': 'HMMcopy',
     'secnv': 'SeCNV',
@@ -185,8 +185,8 @@ TOOL_PRETTY = {
 caller2desc = {
     'aneufinder': 'AneuFinder  Genome Biology               2016',
     'flcna'     : 'FLCNA       Genome Research              2024',
-    'chisel'    : 'Chisel      Nature Biotechnology         2021',
-    'copynumber': 'CopyNumber  BMC Genomics                 2012',
+    'chisel'    : 'CHISEL      Nature Biotechnology         2021',
+    'copynumber': 'Copynumber  BMC Genomics                 2012',
     'ginkgo'    : 'Ginkgo      Nature Methods               2015',
     'hmmcopy'   : 'HMMcopy     Bioinformatics               2006',
     'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
@@ -1938,7 +1938,7 @@ def plot_combined_four(figs_spec, args):
 
     # Use nearly the full page width for the panels.  The shared legend is
     # moved below the 2x2 grid instead of consuming a right-hand column.
-    # This gives long method names (CopyNumber, AneuFinder, scAbsolute, ...)
+    # This gives long method names (Copynumber, AneuFinder, scAbsolute, ...)
     # enough horizontal room to remain only slightly tilted without overlap.
     left, right = 0.082, 0.988
     bottom, top = 0.245, 0.965
@@ -2045,7 +2045,7 @@ def expand_runs_to_entries(*args, **kwargs):
 _CALLER_DISPLAY = {
     'aneufinder': 'AneuFinder',
     'flcna'     : 'FLCNA',
-    'chisel'    : 'Chisel',
+    'chisel'    : 'CHISEL',
     'copynumber': 'Copynumber',
     'ginkgo'    : 'Ginkgo',
     'hmmcopy'   : 'HMMcopy',

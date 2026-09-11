@@ -229,15 +229,20 @@ def _gen_caller_and_clustermap_rules(args, root, df0, data2to4dir, donor_to_bams
             if tool in SC_CN_EVAL_TOOLS:
                 bed_glob = F'{datdir}*intcns.bed'
                 dep_bed_glob = F'{datdir}*depcns.bed'
-                title = F'{tool} | donor={donor} sampleType={sampleType} avgSpotLen={avgSpotLen}'
+                # The figure title is composed by cnv_clustermap.py from these structured
+                # fields (finding F-004): it prints the caller's manuscript spelling only
+                # and keeps the sample metadata as PDF provenance, so no internal
+                # key=value string such as "avgSpotLen=nan" can reach the figure.
+                title_args = (F'--tool {tool} --donor "{donor}" '
+                              F'--sample-type "{sampleType}" --avg-spot-len "{avgSpotLen}"')
                 with cm.myopen(clmap_script, args.writing_mode) as cf:
                     cmd = (F'python {root}/copy-num-bench-scwgs/cnv_clustermap.py '
                            F'-i {bed_glob} -o {clmap_prefix} --fai {ref}.fai --bin-size 1_000_000 '
                            F'--metadata-tsv "{os.path.abspath(args.SraRunTable)}" '
-                           F'--title "{title}" && python {root}/copy-num-bench-scwgs/cnv_clustermap.py '
+                           F'{title_args} && python {root}/copy-num-bench-scwgs/cnv_clustermap.py '
                            F'-i {dep_bed_glob} -o {clmap_prefix}_relative --fai {ref}.fai --bin-size 1_000_000 '
                            F'--metadata-tsv "{os.path.abspath(args.SraRunTable)}" --float-copy-numbers '
-                           F'--title "{title} | relative" #sequential=clustermap.{tool}/')
+                           F'{title_args} --title-suffix relative #sequential=clustermap.{tool}/')
                     write2file(cmd, cf, clmap_script)
                 deps.append((script2, clmap_script))
                 deps.append((clmap_script, F'data4from2and3_3_clustermap_DSA_{donor}_{sampleType}_{avgSpotLen}.rule'))
