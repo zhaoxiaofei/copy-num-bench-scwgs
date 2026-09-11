@@ -61,7 +61,7 @@ SKIP_FIG3=${SKIP_FIG3:-0}
 SKIP_FIG4=${SKIP_FIG4:-0}
 SKIP_FIG5=${SKIP_FIG5:-0}
 SKIP_COPY=${SKIP_COPY:-0}
-RERUN_HEATMAPS=${RERUN_HEATMAPS:-0}
+RERUN_HEATMAPS=${RERUN_HEATMAPS:-1}
 RECOMPILE_SI=${RECOMPILE_SI:-0}
 
 log() { printf '\n=== [%s] %s ===\n' "$(date '+%F %T')" "$*"; }
@@ -155,7 +155,7 @@ if [[ "${SKIP_FIG4}" != 1 ]]; then
     if [[ "${RERUN_HEATMAPS}" == 1 ]]; then
         log "step 5/6: re-rendering the per-caller HG008 heatmaps"
         for f in "${HG008_DIR}"/2into4_*_4_step2_*.logdir/*_tumor_clustermap.sh; do
-            echo bash -evx "$f"
+            echo bash -evx "$f" ' || true'
         done | parallel
     fi
     log "step 5/6: merging the per-caller heatmaps into ${HEATMAP_PDF}"
