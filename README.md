@@ -238,7 +238,8 @@ Notes:
 * Step 3 only plots; it never re-runs a caller, so it can be repeated after changes to the
   plotting code (`cnv_clustermap.py`, `cnv_heatmap_montage.py`, `bench_results/*.py`).
 * If a `cnv_clustermap.py` change should reach an existing HG008 run, re-run the per-caller
-  scripts directly, or run `RERUN_HEATMAPS=1 entire_pipeline.sh`:
+  scripts directly, or run `entire_pipeline.sh` (it re-renders them by default,
+  `RERUN_HEATMAPS=1`):
   `for f in "${HG008}"/2into4_*_4_step2_*.logdir/*_tumor_clustermap.sh; do bash -evx "$f"; done`
 * The main-text figures live as pictures inside the Word files, so Fig. 2-Fig. 5 have to be
   pasted there from the `Fig*` files above; the SI (`cnb-g-3-suppall-k.tex` plus its two
@@ -261,7 +262,18 @@ The plotting scripts and their key options:
 ## 6. Reproducing everything with one command
 
 `entire_pipeline.sh` runs the steps of the previous section in order and copies the results
-into `${DEST}` (`../manuscript_data/raw_figs` by default, created if missing):
+into `${DEST}`.  The default is
+`../manuscript_data/raw_figs_<commit id>-<clean|dirty>` (the commit id of this repository,
+e.g. `raw_figs_4f7495b-dirty`), so every run lands in a directory that identifies the code
+version that produced its display items; a `DEST` given on the command line gets the same
+suffix appended (the directory is created if missing):
+
+Both code repositories' commit ids, `-clean`/`-dirty` state, commit messages and full
+uncommitted diffs are printed once at the very start and once at the very end of the run
+(so code edits made while the pipeline was running show up in the second report).  Both
+reports are written to `${GIT_SNAPSHOT_TXT}` and, at the very end, copied into `${DEST}`
+under the same file name (`entire_pipeline.git-snapshot.txt` by default; skipped together
+with the rest of the copy step when `SKIP_COPY=1`).
 
 ```bash
 # Modify the absolute file-path names in entire_pipeline.sh
@@ -271,10 +283,14 @@ bash entire_pipeline.sh                     # pipelines + figures + copy
 # figures only, from results that are already on disk:
 SKIP_GERMLINE_RUN=1 SKIP_ACT=1 SKIP_HG008_RUN=1 SKIP_SCRNA_RUN=1 bash entire_pipeline.sh
 
-# also re-render the HG008 heatmaps, refresh only Fig. 2, recompile the SI, ...
-RERUN_HEATMAPS=1 bash entire_pipeline.sh
+# keep the existing HG008 heatmaps (RERUN_HEATMAPS=1, the default, re-renders them):
+RERUN_HEATMAPS=0 bash entire_pipeline.sh
+
+# refresh only Fig. 2 (skip the other figure steps):
 SKIP_GERMLINE_RUN=1 SKIP_ACT=1 SKIP_HG008_RUN=1 SKIP_SCRNA_RUN=1 \
     SKIP_FIG3=1 SKIP_FIG4=1 SKIP_FIG5=1 bash entire_pipeline.sh
+
+# recompile the SI after copying:
 RECOMPILE_SI=1 bash entire_pipeline.sh
 ```
 
@@ -284,14 +300,16 @@ Switches (0 = run, 1 = skip):
 |---|---|
 | `SKIP_GERMLINE_RUN`, `SKIP_ACT`, `SKIP_HG008_RUN`, `SKIP_SCRNA_RUN` | skip the heavy pipeline runs (reuse existing results) |
 | `SKIP_FIG2`, `SKIP_FIG3`, `SKIP_FIG4`, `SKIP_FIG5` | skip the figure steps (Fig. 2+SI S1-S22, Fig. 3, Fig. 4+SI S23-S30, Fig. 5+SI S31-S36+Table S1) |
-| `SKIP_COPY` | skip the copy step |
-| `RERUN_HEATMAPS` | re-run the per-caller HG008 `cnv_clustermap.py` scripts even when their outputs exist |
-| `RECOMPILE_SI` | recompile the SI LaTeX in `${MANUSCRIPT}` after copying |
+| `SKIP_COPY` | skip the copy step (including the git snapshot report) |
+| `RERUN_HEATMAPS` | re-run the per-caller HG008 `cnv_clustermap.py` scripts even when their outputs exist (default 1; set 0 to keep them) |
+| `RECOMPILE_SI` | recompile the SI LaTeX in `${MANUSCRIPT}` after copying (default 0) |
 
 Further variables: `CORES` (default 200), `SCRNA_CORES` (default 80), `CONDA_ENV` (default
 `copy-num-bench-scwgs`; `CONDA_ENV=""` keeps the current environment), `REPO`, `DATA`,
 `REAL`, `SCRNA`, `MANUSCRIPT`, `DEST`, `PREFIX`, `PLOIDY_PREFIX`, `HEATMAP_PDF`,
-`HG008_DONOR`.
+`HG008_DONOR`, `GIT_SNAPSHOT_TXT` (default
+`${REPO}/bench_results/entire_pipeline.git-snapshot.txt`).  The code-version suffix
+(`<commit id>-<clean|dirty>` of this repository) is always appended to `DEST`.
 
 ---
 
