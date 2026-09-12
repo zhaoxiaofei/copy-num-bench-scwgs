@@ -166,8 +166,12 @@ PERCELL_SUFFIX = '_percell.tsv'
 DEFAULT_PLOIDY_WINDOW = 0.5
 DEFAULT_MAX_CN = 10.0
 
-CALLER_ORDER = ['scabsolute', 'hmmcopy', 'ginkgo', 'copynumber', 'secnv',
-                'sccnv', 'scyn', 'chisel', 'aneufinder', 'flcna']
+# Methods are ordered chronologically by their publication date (exact dates are
+# documented in bench_results/scWGS-performances-eval.py, CALLER_PUBLICATION):
+# HMMcopy 2006, Copynumber 2012, Ginkgo 2015, AneuFinder 2016, SCCNV 2020,
+# CHISEL 2021, SCYN 2021, SeCNV 2022, FLCNA 2024, scAbsolute 2024.
+CALLER_ORDER = ['hmmcopy', 'copynumber', 'ginkgo', 'aneufinder', 'sccnv',
+                'chisel', 'scyn', 'secnv', 'flcna', 'scabsolute']
 
 TOOL_PRETTY = {
     'aneufinder': 'AneuFinder',
@@ -182,19 +186,24 @@ TOOL_PRETTY = {
     'scabsolute': 'scAbsolute',
 }
 
-caller2desc = {
-    'aneufinder': 'AneuFinder  Genome Biology               2016',
-    'flcna'     : 'FLCNA       Genome Research              2024',
-    'chisel'    : 'CHISEL      Nature Biotechnology         2021',
-    'copynumber': 'Copynumber  BMC Genomics                 2012',
-    'ginkgo'    : 'Ginkgo      Nature Methods               2015',
-    'hmmcopy'   : 'HMMcopy     Bioinformatics               2006',
-    'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
-    'sccnv'     : 'SCCNV       Frontiers in Genetics        2020',
-    'scyn'      : 'SCYN/SCOPE  Cell Systems                 2020',
-    'scabsolute': 'scAbsolute  Genome Biology               2024',
+# Publication year shown after each method name, matching the main caller figures
+# (see CALLER_PUBLICATION in bench_results/scWGS-performances-eval.py).
+TOOL_PUBLICATION_YEAR = {
+    'hmmcopy'   : 2006,
+    'copynumber': 2012,
+    'ginkgo'    : 2015,
+    'aneufinder': 2016,
+    'sccnv'     : 2020,
+    'chisel'    : 2021,
+    'scyn'      : 2021,
+    'secnv'     : 2022,
+    'flcna'     : 2024,
+    'scabsolute': 2024,
 }
-# Annotated row labels, off by default exactly as in scWGS-performances-eval.py.
+
+# Method labels are built by pretty_tool() from TOOL_PRETTY + TOOL_PUBLICATION_YEAR
+# (manuscript spelling + publication year); the old raw caller2desc mapping is kept
+# empty for backwards compatibility with callers that expect the symbol to exist.
 caller2desc = {}
 
 # The three emulated cell-lines of the germline-derived (4from3) arm, and the
@@ -325,7 +334,12 @@ def fmt_max_cn(value):
 
 
 def pretty_tool(tool):
-    return TOOL_PRETTY.get(tool, tool)
+    """Manuscript spelling plus publication year, e.g. 'Ginkgo 2015'.  Kept on one
+    line because the method labels are vertically staggered under the panels; the
+    main caller figures use the two-line 'Ginkgo\\n2015' form instead."""
+    name = TOOL_PRETTY.get(tool, tool)
+    year = TOOL_PUBLICATION_YEAR.get(tool)
+    return F'{name} {year}' if year else name
 
 
 def _fold(name):
@@ -1095,7 +1109,7 @@ def plot_legacy(runs, cells, the_methods, the_datasets, args):
                 ylim = entry_ylim(sub, [window], args)
             ax2.set_ylim(*ylim)
             if colidx == 0:
-                ax2.set_ylabel(caller2desc.get(method, method), fontsize=10, labelpad=8)
+                ax2.set_ylabel(pretty_tool(method), fontsize=10, labelpad=8)
             else:
                 ax2.set_ylabel('')
             same_ylim_within_row = bool(args.ylim) or args.sharey in ('all', 'row')
@@ -2763,5 +2777,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

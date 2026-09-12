@@ -38,7 +38,7 @@ rng = np.random.default_rng(7)
 # ------------------------------------------------------------------ Fig. 2 --
 callers = ['aneufinder', 'chisel', 'copynumber', 'flcna', 'ginkgo', 'hmmcopy',
            'sccnv', 'scyn', 'secnv']
-metrics = ['accuracy', 'PCC_intCN', 'PCC_nonintCN', 'frac_cov_genome',
+metrics = ['intCN_accuracy', 'intCN_PCC', 'nonintCN_PCC', 'CN_genome_cov_frac',
            'breakpoint_precision', 'breakpoint_recall', 'breakpoint_f1score']
 scenarios = ['with_haploidy_assumed_gametes', 'with_aneuploidy_aware_gametes']
 
@@ -83,7 +83,7 @@ for c in callers:
                 base = (cell_base[i] + caller_effect[c]
                         + donor_caller_noise[(d, c)]     # donor-shared effect
                         + rng.normal(0, 0.04))
-                if m in ('PCC_intCN', 'PCC_nonintCN'):
+                if m in ('intCN_PCC', 'nonintCN_PCC'):
                     base = 0.7 * base
                 row[F'{sc}.{m}'] = float(np.clip(base, -1, 1))
         rows.append(row)

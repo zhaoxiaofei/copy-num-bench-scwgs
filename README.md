@@ -99,6 +99,25 @@ cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
 main-text figures (`<prefix>.plots_final_grid.*`, `<prefix>.plots_main.*`,
 `<prefix>.plots_multirow_main.*`).  `-t 2` redraws only the main figures.
 
+Each metric is evaluated on the cell type it applies to, and every metric label states the
+scope: `intCN_accuracy` and `CN_genome_cov_frac` use all simulated cells; the PCCs
+(`intCN_PCC`, `nonintCN_PCC`) and the breakpoint metrics use the aneuploid cells only (the
+normal/diploid simulations have a constant CN = 2 ground truth and therefore no expected CN
+transitions); and `intCN_modal_frac`, the base-pair-weighted fraction of the CNV-call-covered
+genome assigned to the modal observed CN state, uses the diploid (normal) cells only.
+`intCN_modal_frac` is computed from the observed calls alone, so it is identical under Hap_0
+and Hap_1 and is shown once (legend key `N/A`).
+
+The columns (callers) are ordered by each tool's exact publication date and labelled with the
+publication year, e.g. `Ginkgo\n2015`; the metric rows are grouped and sorted by importance
+(`intCN_accuracy`, `intCN_PCC`, `nonintCN_PCC`, `breakpoint_f1score`, `breakpoint_precision`,
+`breakpoint_recall`, `intCN_modal_frac`, `CN_genome_cov_frac`) — the modal-CN fraction and the
+covered-genome fraction are the second-last and last rows.  The same year-suffixed method names
+and chronological method order are used by the ploidy figures
+(`bench_results/scWGS-ploidy-performances-eval.py`), the CNV heatmap titles
+(`cnv_clustermap.py`) and the scRNA-seq companion repository
+(`plot_cnv_heatmaps.py`).
+
 ---
 
 ## 5. Generating the manuscript figures
@@ -502,18 +521,18 @@ In brief, our benchmarking strategy satisfies two seemingly conflicting requirem
 
 Our results show that Ginkgo performs the best for calling copy-number variations/variants
 (CNVs) from single-cell whole-genome sequencing data.
-The metrics `accuracy` and `PCC_intCN` (i.e., Pearson correlation coefficient of intCN)
+The metrics `intCN_accuracy` and `intCN_PCC` (i.e., Pearson correlation coefficient of intCN)
 measure the observed (i.e., called) versus expected (i.e., ground-truth) integer copy numbers
 (CNs).
-The metric `PCC_nonintCN` is the Pearson correlation coefficient of observed non-integer CN
+The metric `nonintCN_PCC` is the Pearson correlation coefficient of observed non-integer CN
 versus expected integer CN.
-The metric `frac_cov_genome` refers to the fraction of the human reference genome hg19 that is
+The metric `CN_genome_cov_frac` refers to the fraction of the human reference genome hg19 that is
 covered by the observed CN profile.
 The metric `breakpoint_f1score` is the F1-score of detecting CN changes (i.e., breakpoints):
-An observed breakpoint is precise (i.e., true positive) if at least one expected breakpoint is
-within 200 000 base pairs of the observed breakpoint, and an expected breakpoint is recalled
-(i.e., true positive) if at least one observed breakpoint is within 200 000 base pairs of the
-expected breakpoint.
+a called CN transition (breakpoint) is precise (i.e., true positive) if it is matched
+one-to-one, closest pairs first, with a ground-truth CN transition within 200 000 base pairs,
+and a ground-truth CN transition is recalled (i.e., true positive) if it is matched that way
+with a called CN transition.
 Fig. S1 shows performances as a function of each performance-related factor (e.g., ploidy
 estimation accuracy and average sequencing depth).
 

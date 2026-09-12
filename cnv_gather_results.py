@@ -26,10 +26,11 @@ def main():
         "with_aneuploidy_aware_gametes.genome_size",
         'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio',
 
-        "with_aneuploidy_aware_gametes.accuracy",
-        "with_aneuploidy_aware_gametes.PCC_intCN",
-        "with_aneuploidy_aware_gametes.PCC_nonintCN",
-        "with_aneuploidy_aware_gametes.frac_cov_genome",
+        "with_aneuploidy_aware_gametes.intCN_accuracy",
+        "with_aneuploidy_aware_gametes.intCN_PCC",
+        "with_aneuploidy_aware_gametes.nonintCN_PCC",
+        "with_aneuploidy_aware_gametes.CN_genome_cov_frac",
+        "with_aneuploidy_aware_gametes.intCN_modal_frac",   # scenario-independent (observed calls only)
         
         "with_aneuploidy_aware_gametes.breakpoint_precision",
         "with_aneuploidy_aware_gametes.breakpoint_recall",
@@ -39,18 +40,19 @@ def main():
         "with_haploidy_assumed_gametes.genome_size",
         'with_haploidy_assumed_gametes.obs2exp_ploidy_ratio',
 
-        "with_haploidy_assumed_gametes.accuracy",
-        "with_haploidy_assumed_gametes.PCC_intCN",
-        "with_haploidy_assumed_gametes.PCC_nonintCN",
-        "with_haploidy_assumed_gametes.frac_cov_genome",
+        "with_haploidy_assumed_gametes.intCN_accuracy",
+        "with_haploidy_assumed_gametes.intCN_PCC",
+        "with_haploidy_assumed_gametes.nonintCN_PCC",
+        "with_haploidy_assumed_gametes.CN_genome_cov_frac",
+        "with_haploidy_assumed_gametes.intCN_modal_frac",   # scenario-independent (observed calls only)
         
         "with_haploidy_assumed_gametes.breakpoint_precision",
         "with_haploidy_assumed_gametes.breakpoint_recall",
         "with_haploidy_assumed_gametes.breakpoint_f1score",
     ]
     nan_keys = [
-            "with_aneuploidy_aware_gametes.PCC_intCN", "with_aneuploidy_aware_gametes.PCC_nonintCN",
-            "with_haploidy_assumed_gametes.PCC_intCN", "with_haploidy_assumed_gametes.PCC_nonintCN",
+            "with_aneuploidy_aware_gametes.intCN_PCC", "with_aneuploidy_aware_gametes.nonintCN_PCC",
+            "with_haploidy_assumed_gametes.intCN_PCC", "with_haploidy_assumed_gametes.nonintCN_PCC",
     ]
     parser = argparse.ArgumentParser(description='Compute summary statistics related to mean (avg, sd) and median (min, Q1, Q2, Q3, max). ')
     #parser.add_argument('--caller', type=str, required=True, help='Single-cell copy-number caller (can be set to hmmcopy, ginkgo, etc.). ')
@@ -119,6 +121,10 @@ def main():
         long_dfs.append(caller_specific_df)
         for key in PERF_KEYS:
             vals = key2vals[key]
+            # [FIX 10] perf.json is strict JSON now: an undefined metric (e.g. a PCC of a
+            # constant CN vector) is written as null, i.e. None after json.load(), so map
+            # the nulls back to NaN before the mean/std computations below.
+            vals = [np.nan if v is None else v for v in vals]
             finite_vals = [v for v in vals if isinstance(v, (int, float)) and not math.isnan(v)]
             if len(finite_vals) >= 2:
                 q1, q2, q3 = statistics.quantiles(finite_vals, n=4)

@@ -95,7 +95,8 @@ def _tex_escape(s):
             .replace('%', r'\%')
             .replace('_', r'\_')
             .replace('#', r'\#')
-            .replace('$', r'\$'))
+            .replace('$', r'\$')
+            .replace('^', r'\^{}'))
 
 
 def _fmt_pvalue_holm(x, alpha=0.05):
@@ -199,14 +200,17 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
     for rec in piv.itertuples(index=False):
         p_hap0 = _fmt_pvalue_holm(rec.Hap_0, alpha=alpha)
         p_hap1 = _fmt_pvalue_holm(rec.Hap_1, alpha=alpha)
+        # the cell type a metric applies to is part of its display name (e.g.
+        # 'PCC_intCN (aneuploid cells)'), matching the figure labels
+        metric_label = F'{rec.metric} ({metric_cell_type_label(rec.metric)})'
         if show_caller_a:
-            lines.append(F'    {_tex_escape(rec.metric)} '
-                         F'& {_tex_escape(rec.caller_a)} '
-                         F'& {_tex_escape(rec.caller_b)} '
+            lines.append(F'    {_tex_escape(metric_label)} '
+                         F'& {_tex_escape(caller_display_name_tex(rec.caller_a))} '
+                         F'& {_tex_escape(caller_display_name_tex(rec.caller_b))} '
                          F'& {p_hap0} & {p_hap1} \\\\')
         else:
-            lines.append(F'    {_tex_escape(rec.metric)} '
-                         F'& {_tex_escape(rec.caller_b)} '
+            lines.append(F'    {_tex_escape(metric_label)} '
+                         F'& {_tex_escape(caller_display_name_tex(rec.caller_b))} '
                          F'& {p_hap0} & {p_hap1} \\\\')
     lines += [
         '    \\bottomrule',
@@ -325,30 +329,49 @@ if args.latex_table:
         table_label='tab:scwgs-perf-pairwise',
         alpha=args.stats_alpha))
 
-# The triple-quoted string below maps each caller to its journal and publication year
-'''
-    'aneufinder': 'AneuFinder  Genome Biology               2016',
-    'flcna'     : 'FLCNA       Genome Research              2024',
-    'chisel'    : 'CHISEL      Nature Biotechnology         2021',
-    'copynumber': 'Copynumber  BMC Genomics                 2012',
-    'ginkgo'    : 'Ginkgo      Nature Methods               2015',
-    'hmmcopy'   : 'HMMcopy     Bioinformatics               2006',
-    'secnv'     : 'SeCNV       Briefings in Bioinformatics  2022',
-    'sccnv'     : 'SCCNV       Frontiers in Genetics        2020',
-    'scyn'      : 'SCYN/SCOPE  Cell Systems                 2020',
-'''
-
-caller2desc = {
-    'aneufinder': 'AneuFinder',
-    'flcna'     : 'FLCNA',
-    'chisel'    : 'CHISEL',
-    'copynumber': 'Copynumber',
-    'ginkgo'    : 'Ginkgo',
-    'hmmcopy'   : 'HMMcopy',
-    'secnv'     : 'SeCNV',
-    'sccnv'     : 'SCCNV',
-    'scyn'      : 'SCYN',
+# Column (caller) metadata: the manuscript name, the publication year shown under the
+# name, and the exact publication date used to sort the columns (journal issue date
+# where the journal assigns one, otherwise the online first-publication date; Europe
+# PMC, verified 2026-09-12).  The DOI of each paper is listed for traceability:
+#   HMMcopy    10.1093/bioinformatics/btl238   2006-07-01
+#   Copynumber 10.1186/1471-2164-13-591        2012-11-04
+#   Ginkgo     10.1038/nmeth.3578              2015-09-07
+#   AneuFinder 10.1186/s13059-016-0971-7       2016-05-31
+#   SCCNV      10.3389/fgene.2020.505441       2020-11-16
+#   CHISEL     10.1038/s41587-020-0661-6       2021-02-01 (issue; online 2020-09-02)
+#   SCYN       10.1186/s12864-021-07941-3      2021-11-16
+#   SeCNV      10.1093/bib/bbac264             2022-07-01
+#   FLCNA      10.1101/gr.278098.123           2024-02-07
+CALLER_PUBLICATION = {
+    'hmmcopy'   : ('HMMcopy',    2006, '2006-07-01'),
+    'copynumber': ('Copynumber', 2012, '2012-11-04'),
+    'ginkgo'    : ('Ginkgo',     2015, '2015-09-07'),
+    'aneufinder': ('AneuFinder', 2016, '2016-05-31'),
+    'sccnv'     : ('SCCNV',      2020, '2020-11-16'),
+    'chisel'    : ('CHISEL',     2021, '2021-02-01'),
+    'scyn'      : ('SCYN',       2021, '2021-11-16'),
+    'secnv'     : ('SeCNV',      2022, '2022-07-01'),
+    'flcna'     : ('FLCNA',      2024, '2024-02-07'),
 }
+
+
+def caller_display_name(caller):
+    """Caller column label: manuscript name plus its exact publication year, e.g.
+    'Ginkgo\\n2015'."""
+    name, year, _ = CALLER_PUBLICATION.get(str(caller), (str(caller), None, '9999-99-99'))
+    return F'{name}\n{year}' if year else name
+
+
+def caller_sort_key(caller):
+    """Chronological column order (exact publication date); unknown callers last."""
+    name, _, date = CALLER_PUBLICATION.get(str(caller), (str(caller), None, '9999-99-99'))
+    return (date, name)
+
+
+def caller_display_name_tex(caller):
+    """LaTeX-table label: manuscript name plus publication year, e.g. 'Ginkgo 2015'."""
+    name, year, _ = CALLER_PUBLICATION.get(str(caller), (str(caller), None, ''))
+    return F'{name} {year}'.strip()
 
 logscale_features = [
         'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio',
@@ -401,17 +424,133 @@ categorical_features = list(CATEGORICAL_FEATURES_NAME2DESC.keys())
 
 FEATURES_NAME2DESC = (CONTINUOUS_FEATURES_NAME2DESC | CATEGORICAL_FEATURES_NAME2DESC)
 
+# --------------------------------------------------------------------------- #
+# Metric IDs, scopes and order                                                #
+# --------------------------------------------------------------------------- #
+# The pipeline's historical metric IDs are renamed to the manuscript IDs when the
+# long TSV is read, so an already-generated TSV keeps working (and a TSV that already
+# uses the new IDs is accepted unchanged).  Refresh the mapping in
+# cnv_bedset_to_consistency.py / cnv_gather_results.py when the data are regenerated.
+METRIC_ID_RENAMES = {
+    'accuracy'       : 'intCN_accuracy',
+    'PCC_intCN'      : 'intCN_PCC',
+    'PCC_nonintCN'   : 'nonintCN_PCC',
+    'frac_cov_genome': 'CN_genome_cov_frac',
+    'frac_modal_cn'  : 'intCN_modal_frac',
+    'frac_mod_cn^N'  : 'intCN_modal_frac',   # transitional name from an earlier revision
+}
+
+
+def rename_metric_columns(df):
+    """Apply METRIC_ID_RENAMES to every '<scenario>.<metric>' column."""
+    renames = {}
+    for col in df.columns:
+        if '.' not in col:
+            continue
+        prefix, metric = col.rsplit('.', 1)
+        new_metric = METRIC_ID_RENAMES.get(metric)
+        if new_metric and new_metric not in df.columns:
+            renames[col] = F'{prefix}.{new_metric}'
+    if renames:
+        shown = ', '.join(F'{k} -> {v}' for k, v in sorted(renames.items())[:4])
+        logging.info('renaming %d metric column(s): %s%s', len(renames), shown,
+                     ' ...' if len(renames) > 4 else '')
+    return df.rename(columns=renames)
+
+
+# Rows are grouped by what they measure and, within a group, by importance:
+# integer-CN agreement first, then the correlation metrics, then the breakpoint
+# metrics, and finally the two "call-quality" fractions (modal-CN fraction, then
+# covered-genome fraction), which are the last two rows.
+METRIC_ORDER = [
+    'intCN_accuracy',
+    'intCN_PCC',
+    'nonintCN_PCC',
+    'breakpoint_f1score',
+    'breakpoint_precision',
+    'breakpoint_recall',
+    'intCN_modal_frac',
+    'CN_genome_cov_frac',
+]
+
+# Cell type(s) each metric is evaluated on.  intCN_accuracy and CN_genome_cov_frac
+# are meaningful for every simulated cell, and their figures/statistics therefore keep
+# all cells.  The correlation and breakpoint metrics are restricted to the ANEUPLOID
+# simulations: the normal (diploid) simulations have a constant ground-truth total CN
+# (CN=2), so they have no ground-truth CN transitions (the Hap_0 breakpoint ratios are
+# undefined there) and their CN profile is dominated by allelic/copy-neutral structure
+# that these metrics cannot score.  intCN_modal_frac is by definition a property of the
+# normal (non-tumor, diploid) simulations.
+METRIC_CELL_TYPES = {
+    'intCN_accuracy'      : 'all',
+    'intCN_PCC'           : 'aneuploid',
+    'nonintCN_PCC'        : 'aneuploid',
+    'CN_genome_cov_frac'  : 'all',
+    'intCN_modal_frac'    : 'diploid',
+    'breakpoint_f1score'  : 'aneuploid',
+    'breakpoint_precision': 'aneuploid',
+    'breakpoint_recall'   : 'aneuploid',
+}
+METRIC_CELL_TYPE_LABELS = {'all': 'all cells', 'diploid': 'diploid cells', 'aneuploid': 'aneuploid cells'}
+
+# intCN_modal_frac uses only the observed (called) CN profile, so it does not depend on
+# the ground-truth scenario; it is displayed once instead of once per scenario (the
+# legend carries an 'N/A' key for it).
+SCENARIO_INDEPENDENT_PERF_METRICS = frozenset({'intCN_modal_frac'})
+SCENARIO_INDEPENDENT_TAG = 'observed calls'
+
+
+def metric_cell_type(metric):
+    return METRIC_CELL_TYPES.get(metric, 'all')
+
+
+def metric_cell_type_label(metric):
+    return METRIC_CELL_TYPE_LABELS[metric_cell_type(metric)]
+
+
+def metric_display_name(metric, sep='\n'):
+    """Metric ID plus the cell type it is evaluated on, e.g.
+    'breakpoint_recall\\n(aneuploid cells)'."""
+    return F'{metric}{sep}({metric_cell_type_label(metric)})'
+
+
+def metric_scenario_order(metric, scenario_order):
+    """Scenarios plotted for a metric: both ground-truth scenarios, or the single
+    'observed calls' series for scenario-independent metrics."""
+    return [SCENARIO_INDEPENDENT_TAG] if metric in SCENARIO_INDEPENDENT_PERF_METRICS else scenario_order
+
+
+def restrict_metrics_to_cell_types(df):
+    """NaN out every metric/scenario column outside the cell type it applies to, so
+    that both the figures and the statistical tests use that metric's own cell subset
+    (all / aneuploid / diploid)."""
+    if 'overall_ploidy' not in df.columns:
+        logging.warning('column overall_ploidy is missing: metric cell-type restrictions are skipped')
+        return df
+    ploidy = df['overall_ploidy'].astype(str)
+    for metric, cell_type in METRIC_CELL_TYPES.items():
+        if cell_type == 'all':
+            continue
+        mask = ploidy != cell_type
+        for col in [c for c in df.columns if c.endswith('.' + metric)]:
+            df.loc[mask, col] = np.nan
+    return df
+
+
 if (args.type & 0x1):
     continuous_features = [continuous_features[0]]
     categorical_features = [categorical_features[0]]
 
 df = pd.read_csv(sys.stdin, sep='\t')
+df = rename_metric_columns(df)
 sortby_columns = (['Caller'] + [x for x in (categorical_features + continuous_features) if x in df.columns])
 df = df.sort_values(by=sortby_columns)
+df = restrict_metrics_to_cell_types(df)
 df['n_samples_mixed'] = np.where(df['accession_1'] == df['accession_2'], 1, 2)
 the_df = df.copy()
 the_callers = set(df['Caller'].unique())
-caller_and_its_df_iterable = df.groupby('Caller')
+# columns (callers) are ordered by the exact publication date of each tool
+caller_and_its_df_iterable = sorted(df.groupby('Caller'), key=lambda kv: caller_sort_key(kv[0]))
 
 # --------------------------------------------------------------------------- #
 # Plot configuration                                                          #
@@ -425,20 +564,24 @@ SKIP_KDEPLOTS = True         # [FIX] the 2-D KDE layer carries so much vector gr
 
 # Verbose definitions: NOT drawn inside the figures anymore. Paste them into the figure caption.
 THE_PERF_METRIC_NAME2DESC = {
-    'accuracy': 'Accuracy (Acc) of the observed (called) versus expected (ground-truth) integer copy numbers (CNs)',
-    'PCC_intCN': 'Pearson correlation coefficient (PCC) of the observed (called) versus expected (ground-truth) integer copy numbers (CNs)',
-    'PCC_nonintCN': 'Pearson correlation coefficient (PCC) of the observed (called) non-integer copy numbers versus the expected (ground-truth) integer copy numbers (CNs)',
-    'frac_cov_genome': 'Fraction of the human reference genome hg19 covered by the observed (called) copy-number profile',
+    'intCN_accuracy': 'Accuracy (Acc) of the observed (called) versus expected (ground-truth) integer copy numbers (CNs)',
+    'CN_genome_cov_frac': 'Fraction of the human reference genome hg19 covered by the observed (called) copy-number profile',
+    'intCN_modal_frac': 'Fraction of the CNV-call-covered genome (base-pair weighted) that is assigned to the modal (most frequent) observed integer copy-number state; in the normal (non-tumor, diploid) simulations the mode is CN=2 unless the caller\'s ploidy estimate is off. The metric uses the observed calls only, so it is identical under the Hap_0 and Hap_1 ground-truth derivations and is shown once (legend key N/A)',
+    'intCN_PCC': 'Pearson correlation coefficient (PCC) of the observed (called) versus expected (ground-truth) integer copy numbers (CNs)',
+    'nonintCN_PCC': 'Pearson correlation coefficient (PCC) of the observed (called) non-integer copy numbers versus the expected (ground-truth) integer copy numbers (CNs)',
     'breakpoint_f1score': 'F1-score of detecting copy-number changes (breakpoints), balancing breakpoint precision and recall',
-    'breakpoint_precision': 'Breakpoint precision: an observed (called) breakpoint is a true positive if at least one expected (ground-truth) breakpoint is within 200 kb',  # [REV]
-    'breakpoint_recall': 'Breakpoint recall: an expected (ground-truth) breakpoint is a true positive if at least one observed (called) breakpoint is within 200 kb',  # [REV]
+    'breakpoint_precision': 'Breakpoint precision: a copy-number transition called by the caller is a true positive if it is matched one-to-one (closest pairs first) with a ground-truth copy-number transition within 200 kb',  # [REV]
+    'breakpoint_recall': 'Breakpoint recall: a ground-truth copy-number transition is a true positive if it is matched one-to-one (closest pairs first) with a copy-number transition called by the caller within 200 kb',  # [REV]
 }
-the_perf_metrics = list(THE_PERF_METRIC_NAME2DESC.keys())
+assert set(METRIC_ORDER) == set(THE_PERF_METRIC_NAME2DESC), \
+    'METRIC_ORDER and THE_PERF_METRIC_NAME2DESC disagree'
+the_perf_metrics = list(METRIC_ORDER)   # rows are grouped and importance-sorted
 THE_PERF_METRIC_NAME2SHORT = {  # short names for the caption; the figures show the IDs only
-    'accuracy': 'Accuracy (Acc)',
-    'PCC_intCN': 'PCC of integer CNs',
-    'PCC_nonintCN': 'PCC of non-integer CNs',
-    'frac_cov_genome': 'Genome coverage',
+    'intCN_accuracy': 'Accuracy (Acc)',
+    'CN_genome_cov_frac': 'Genome coverage',
+    'intCN_modal_frac': 'Fraction at the modal CN',
+    'intCN_PCC': 'PCC of integer CNs',
+    'nonintCN_PCC': 'PCC of non-integer CNs',
     'breakpoint_f1score': 'Breakpoint F1-score',
     'breakpoint_precision': 'Breakpoint precision',
     'breakpoint_recall': 'Breakpoint recall',
@@ -481,6 +624,10 @@ SCENARIO_ORDER = list(gamete_type2short.values())
 _scenario_palette = sns.color_palette('colorblind', len(SCENARIO_ORDER))
 SCENARIO_TEXT_COLORS = {s: tuple(0.55 * ch for ch in _scenario_palette[i]) for i, s in enumerate(SCENARIO_ORDER)}
 SCENARIO_LINE_COLORS = {s: tuple(0.75 * ch for ch in _scenario_palette[i]) for i, s in enumerate(SCENARIO_ORDER)}
+# Neutral colour and legend key for the scenario-independent metrics
+# (intCN_modal_frac): they use the observed calls only and are shown once.
+SCENARIO_NA_COLOR = '0.55'
+SCENARIO_NA_LABEL = 'N/A'
 
 # [STYLE] Bold, centered overall figure title, mirroring the reference
 # metric-by-method grid figure ('scRNA-seq CNV caller performance across
@@ -564,21 +711,25 @@ if args.stats:
 # --------------------------------------------------------------------------- #
 
 def make_tidy_perf_df():
-    """Tidy long dataframe: one row per (caller, cell, metric, ground-truth scenario)."""
+    """Tidy long dataframe: one row per (caller, cell, metric, ground-truth scenario).
+    Scenario-independent metrics contribute a single 'observed calls' series."""
     callers, metrics, scenarios, vals = [], [], [], []
     for metric in the_perf_metrics:
-        for gamete_type in gamete_type2short:
+        scenario_independent = metric in SCENARIO_INDEPENDENT_PERF_METRICS
+        gamete_types = ['with_haploidy_assumed_gametes'] if scenario_independent else list(gamete_type2short)
+        for gamete_type in gamete_types:
+            scenario = SCENARIO_INDEPENDENT_TAG if scenario_independent else gamete_type2short[gamete_type]
             callers.extend(list(the_df['Caller']))
             metrics.extend([metric] * len(the_df))
-            scenarios.extend([gamete_type2short[gamete_type]] * len(the_df))
+            scenarios.extend([scenario] * len(the_df))
             vals.extend(list(the_df[(gamete_type + '.' + metric)]))
     tidy = pd.DataFrame({
-        'Caller': [caller2desc.get(c, c) for c in callers],
+        'Caller': [caller_display_name(c) for c in callers],
         'Metric': metrics,
         'Scenario': scenarios,
         'Performance': vals,
     })
-    caller_order = list(dict.fromkeys(tidy['Caller']))   # appearance order (== sorted)
+    caller_order = [caller_display_name(c) for c in sorted(dict.fromkeys(callers), key=caller_sort_key)]
     scenario_order = list(gamete_type2short.values())
     return tidy, caller_order, scenario_order
 
@@ -618,8 +769,9 @@ def metric_row_ylim(metric, vals):
 
 # Fixed, canonical ranges of the bounded performance metrics (used by metric_row_ylim).
 BOUNDED_PERF_METRIC_RANGES = {
-    'accuracy': (0.0, 1.0),
-    'frac_cov_genome': (0.0, 1.0),
+    'intCN_accuracy': (0.0, 1.0),
+    'CN_genome_cov_frac': (0.0, 1.0),
+    'intCN_modal_frac': (0.0, 1.0),
     'breakpoint_f1score': (0.0, 1.0),
     'breakpoint_precision': (0.0, 1.0),
     'breakpoint_recall': (0.0, 1.0),
@@ -749,10 +901,19 @@ def add_bottom_note(fig, note, side, fontsize=7.5):
                  fontsize=fontsize, color='0.25')
 
 
-def gamete_legend_handles():
+def scenario_na_handle():
+    """Legend key for scenario-independent metrics (intCN_modal_frac): the metric does
+    not depend on the ground-truth derivation, so it is shown once in neutral grey."""
+    return Patch(facecolor=SCENARIO_NA_COLOR, edgecolor='0.2', linewidth=0.8, label=SCENARIO_NA_LABEL)
+
+
+def gamete_legend_handles(include_na=True):
     palette = sns.color_palette('colorblind', len(gamete_type2short))
-    return [Patch(facecolor=c, edgecolor='0.2', linewidth=0.8, label=lab)
-            for c, lab in zip(palette, gamete_type2short.values())]
+    handles = [Patch(facecolor=c, edgecolor='0.2', linewidth=0.8, label=lab)
+               for c, lab in zip(palette, gamete_type2short.values())]
+    if include_na:
+        handles.append(scenario_na_handle())
+    return handles
 
 
 def caller_legend_handles(caller_order):
@@ -779,17 +940,24 @@ def plot_multirow_main():
     for r, metric in enumerate(the_perf_metrics):
         ax = fig.add_subplot(gs[r, 0])
         sub_df = tidy[tidy['Metric'] == metric]
-        boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
-                           hue='Scenario', order=caller_order, hue_order=scenario_order,
-                           palette='colorblind', linewidth=1.0)
+        hue_order = metric_scenario_order(metric, scenario_order)
+        if sub_df['Performance'].notna().any():
+            if metric in SCENARIO_INDEPENDENT_PERF_METRICS:
+                # single series: no ground-truth scenario to compare for this metric
+                boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
+                                   order=caller_order, color=SCENARIO_NA_COLOR, linewidth=1.0)
+            else:
+                boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
+                                   hue='Scenario', order=caller_order, hue_order=hue_order,
+                                   palette='colorblind', linewidth=1.0)
         if ax.legend_ is not None:
             ax.legend_.remove()
         row_ylim = metric_row_ylim(metric, sub_df['Performance'])
         ax.set_ylim(*row_ylim)
         # Medians stay (tie-breaking); the dashed maximal-performance line sits at 1.
-        annotate_box_medians(ax, sub_df, caller_order, scenario_order, fontsize=6, y_ref=1.0)
-        # [STYLE] metric ID as the left-side row label, like the reference rows
-        ax.set_ylabel(metric, fontsize=8, rotation=0, ha='right', va='center', labelpad=8)
+        annotate_box_medians(ax, sub_df, caller_order, hue_order, fontsize=6, y_ref=1.0)
+        # [STYLE] metric ID + its cell-type scope as the left-side row label
+        ax.set_ylabel(metric_display_name(metric), fontsize=8, rotation=0, ha='right', va='center', labelpad=8)
         ax.set_xlabel('')  # kill seaborn's auto 'Caller' x label on every row
         ax.tick_params(axis='y', labelsize=6)
         if r == n_metrics - 1:
@@ -800,7 +968,7 @@ def plot_multirow_main():
         for spine in ('top', 'right'):
             ax.spines[spine].set_visible(False)
     add_fig_title(fig)
-    add_bottom_legend(fig, gamete_legend_handles(), side, ncol=2)
+    add_bottom_legend(fig, gamete_legend_handles(), side, ncol=3)
     add_bottom_note(fig, THE_ABBREV_NOTE_MEDIANS, side)
     try:
         fig.tight_layout()  # same call sequence as the reference figure
@@ -825,25 +993,31 @@ def plot_grid_main():
     for r, metric in enumerate(the_perf_metrics):
         row_df = tidy[tidy['Metric'] == metric]
         row_ylim = metric_row_ylim(metric, row_df['Performance'])  # canonical window, shared per row
+        hue_order = metric_scenario_order(metric, scenario_order)
+        scenario_independent = metric in SCENARIO_INDEPENDENT_PERF_METRICS
         for c, caller in enumerate(caller_order):
             ax = fig.add_subplot(gs[r, c])
             sub_df = row_df[row_df['Caller'] == caller]
-            if not sub_df.empty:
-                boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
-                                   hue='Scenario', order=[caller], hue_order=scenario_order,
-                                   palette='colorblind', linewidth=0.9)
+            if not sub_df.empty and sub_df['Performance'].notna().any():
+                if scenario_independent:
+                    boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
+                                       order=[caller], color=SCENARIO_NA_COLOR, linewidth=0.9)
+                else:
+                    boxplot_with_style(ax, data=sub_df, x='Caller', y='Performance',
+                                       hue='Scenario', order=[caller], hue_order=hue_order,
+                                       palette='colorblind', linewidth=0.9)
                 if ax.legend_ is not None:
                     ax.legend_.remove()
             ax.set_ylim(*row_ylim)
             if not sub_df.empty:
-                annotate_box_medians(ax, sub_df, [caller], scenario_order,
+                annotate_box_medians(ax, sub_df, [caller], hue_order,
                                      fontsize=5.5, y_ref=1.0)
             # [STYLE] panel geometry exactly as in the reference grid
             ax.set_xlim(-0.6, 0.6)
             ax.set_xticks([])
             ax.set_xlabel('')
             if c == 0:
-                ax.set_ylabel(metric, fontsize=8, rotation=0, ha='right', va='center', labelpad=8)
+                ax.set_ylabel(metric_display_name(metric), fontsize=8, rotation=0, ha='right', va='center', labelpad=8)
             else:
                 ax.set_ylabel('')
                 ax.set_yticklabels([])
@@ -859,7 +1033,7 @@ def plot_grid_main():
             for spine in ('top', 'right'):
                 ax.spines[spine].set_visible(False)
     add_fig_title(fig)
-    add_bottom_legend(fig, gamete_legend_handles(), side, ncol=2)
+    add_bottom_legend(fig, gamete_legend_handles(), side, ncol=3)
     add_bottom_note(fig, THE_ABBREV_NOTE_MEDIANS, side)
     try:
         fig.tight_layout()  # same call sequence as the reference figure
@@ -871,25 +1045,36 @@ def plot_grid_main():
 
 
 def plot_main():
-    fig, ax = plt.subplots(figsize=(15.5, 7.5))
+    # [STYLE] the metric column labels carry the metric ID, the cell-type scope and the
+    # ground-truth scenario, so the canvas is slightly wider and the labels slightly
+    # smaller than before to keep 15 adjacent categories from overlapping.
+    fig, ax = plt.subplots(figsize=(17.5, 7.5))
     xcats, callers, vals = [], [], []
     for metric in the_perf_metrics:
-        for gamete_type in gamete_type2short:
-            # [STYLE] two-line horizontal category label, like the reference
-            # figure's bottom column labels ('method\nvariant')
-            xcat = F'{metric}\n({gamete_type2short[gamete_type]})'
+        scenario_independent = metric in SCENARIO_INDEPENDENT_PERF_METRICS
+        gamete_types = ['with_haploidy_assumed_gametes'] if scenario_independent else list(gamete_type2short)
+        for gamete_type in gamete_types:
+            # [STYLE] horizontal category label: metric + cell-type scope (+ scenario),
+            # like the reference figure's bottom column labels ('method\nvariant')
+            xcat = (metric_display_name(metric) if scenario_independent
+                    else F'{metric_display_name(metric)}\n({gamete_type2short[gamete_type]})')
             xcats.extend([xcat] * len(the_df))
             callers.extend(list(the_df['Caller']))
             vals.extend(list(the_df[(gamete_type + '.' + metric)]))
     dfm = pd.DataFrame({
         'Metric': xcats,
-        'Caller': [caller2desc.get(c, c) for c in callers],
+        'Caller': [caller_display_name(c) for c in callers],
         'Performance': vals,
     })
-    xcat_order = [F'{m}\n({gamete_type2short[gt]})'
-                  for m in the_perf_metrics for gt in gamete_type2short]
+    xcat_order = []
+    for m in the_perf_metrics:
+        if m in SCENARIO_INDEPENDENT_PERF_METRICS:
+            xcat_order.append(metric_display_name(m))
+        else:
+            xcat_order.extend(F'{metric_display_name(m)}\n({gamete_type2short[gt]})' for gt in gamete_type2short)
     dfm['Metric'] = pd.Categorical(dfm['Metric'], categories=xcat_order, ordered=True)
-    caller_order = list(dict.fromkeys(dfm['Caller']))
+    dfm = dfm.dropna(subset=['Performance'])  # metrics restricted to one cell type have no point elsewhere
+    caller_order = [caller_display_name(c) for c in sorted(dict.fromkeys(callers), key=caller_sort_key)]
     boxplot_with_style(ax, data=dfm, x='Metric', y='Performance', hue='Caller',
                        hue_order=caller_order, palette='colorblind', linewidth=0.9)
     if ax.legend_ is not None:
@@ -899,7 +1084,7 @@ def plot_main():
     ax.set_xlabel('')
     ax.set_ylabel('Performances', fontsize=10)
     ax.tick_params(axis='y', labelsize=8)
-    ax.tick_params(axis='x', labelsize=8)
+    ax.tick_params(axis='x', labelsize=6.5)
     for spine in ('top', 'right'):
         ax.spines[spine].set_visible(False)
     # [STYLE] bold overall title + shared legend strip at the BOTTOM, as in the
@@ -908,7 +1093,10 @@ def plot_main():
     # at the bottom, mirroring the reference figure's fixed-zone layout.
     # [FIX] bottom margin raised from 0.15 to 0.20: the legend moved up (see below), so
     # the panel x tick labels need to stay clear of its upper frame edge as well.
-    fig.subplots_adjust(left=0.07, right=0.985, top=0.915, bottom=0.20)
+    # [FIX] bottom margin raised from 0.20 to 0.24: the x categories now carry three
+    # lines (metric ID / cell-type scope / ground-truth scenario), so the labels need
+    # to stay clear of the boxed caller legend below them.
+    fig.subplots_adjust(left=0.07, right=0.985, top=0.915, bottom=0.24)
     add_fig_title(fig)
     caller_handles = caller_legend_handles(caller_order)
     fig.legend(handles=caller_handles, loc='lower center', ncol=5,
@@ -958,9 +1146,14 @@ def plot_onepage(page_args): # (continuous_features, categorical_features, the_p
         if feat_min > 0: plot_feat_minmax = feat_min * (1-0.05)
         else: plot_feat_minmax = -1e99
         if plot_feat_min < plot_feat_minmax: plot_feat_min = plot_feat_minmax
+    handles, labels = [], []
     for rowidx, perf_metric in enumerate(the_perf_metrics):
-        feature_all_perf_vals = (pd.to_numeric(df[('with_aneuploidy_aware_gametes.'+perf_metric)], errors='coerce').dropna().tolist()
-                                 + pd.to_numeric(df[('with_haploidy_assumed_gametes.'+perf_metric)], errors='coerce').dropna().tolist())
+        scenario_independent = perf_metric in SCENARIO_INDEPENDENT_PERF_METRICS
+        gamete_types_here = ['with_haploidy_assumed_gametes'] if scenario_independent else list(gamete_type2short)
+        feature_all_perf_vals = []
+        for gamete_type in gamete_types_here:
+            feature_all_perf_vals += pd.to_numeric(
+                df[gamete_type + '.' + perf_metric], errors='coerce').dropna().tolist()
         if feature_all_perf_vals:
             min_perf_val = min(feature_all_perf_vals)
             max_perf_val = max(feature_all_perf_vals)
@@ -970,47 +1163,66 @@ def plot_onepage(page_args): # (continuous_features, categorical_features, the_p
         plot_perf_max = max_perf_val + (max_perf_val - min_perf_val) * 0.05
         for colidx, (caller, caller_df) in enumerate(caller_and_its_df_iterable):
             plot_dfs = []
-            for gamete_type in gamete_type2short:
+            for gamete_type in gamete_types_here:
                 gamete_perf_metric = gamete_type+'.'+perf_metric
                 # x: feature; y: performance metric
                 plot_df = caller_df[[feature]].copy()
                 plot_df[perf_metric] = caller_df[gamete_perf_metric]
-                plot_df['gamete_type'] = gamete_type2short[gamete_type]  # short tag only
+                plot_df['gamete_type'] = (SCENARIO_INDEPENDENT_TAG if scenario_independent
+                                          else gamete_type2short[gamete_type])  # short tag only
                 plot_dfs.append(plot_df)
             plot_df = pd.concat(plot_dfs).reset_index(drop=True)
             ax2 = fig1.add_subplot(gs[rowidx+1, colidx])
-            if feature in categorical_features:
-                if feature == 'donor':  # [REV] shorten the *values*
-                    plot_df[feature] = plot_df[feature].replace('345HS1', 'HS1') # prevent cluttering of words for the donor categorical variable
-                plot_ret = sns.stripplot (data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, rasterized=True)
-            else:
-                logging.info(F'plotting {perf_metric} versus {feature} for {caller}')
-                plot_ret = sns.scatterplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', style='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, markers=['x', '+'], rasterized=True)
-                # [FIX] explicit, documented skip: the KDE layer carries so much
-                # vector graphics that the multipage PDF becomes enormous.
-                # (CODE_v2 initialised this flag to 1, which silently skipped
-                # *every* KDE plot; the behaviour is kept, but now it is named,
-                # and skipping it for data reasons is still reported.)
-                skip_kdeplot = SKIP_KDEPLOTS
-                if not skip_kdeplot:
-                    for _gt, plot_df_2 in plot_df.groupby('gamete_type'):
-                        if len(set(plot_df_2[perf_metric])) == 1:
-                            skip_kdeplot = True
-                            logging.warning(F'KDEplot of {perf_metric} versus {feature} for {caller} skipped: the {gamete_type2short[_gt]} values are constant')
-                if skip_kdeplot:
-                    logging.debug(F'Skip the KDEplot of {perf_metric} versus {feature} for {caller}')
+            # a metric restricted to one cell type has no data for the other cells,
+            # so panels can legitimately be empty; seaborn's boxplot/stripplot/
+            # scatterplot crash on an all-NaN panel, so skip drawing it
+            if plot_df[perf_metric].notna().any():
+                if feature in categorical_features:
+                    if feature == 'donor':  # [REV] shorten the *values*
+                        plot_df[feature] = plot_df[feature].replace('345HS1', 'HS1') # prevent cluttering of words for the donor categorical variable
+                    if scenario_independent:
+                        plot_ret = sns.stripplot(data=plot_df, x=feature, y=perf_metric, ax=ax2,
+                                                 color=SCENARIO_NA_COLOR, alpha=0.125, rasterized=True)
+                    else:
+                        plot_ret = sns.stripplot (data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, rasterized=True)
                 else:
-                    sns.kdeplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', levels=10, fill=True, alpha=0.5, legend=False)
-            # [NEW] one dashed reference line per scenario at that scenario's median performance,
-            # so that almost-tied callers can still be told apart in the supplementary pages
-            for scenario_short in SCENARIO_ORDER:
-                the_median = plot_df.loc[plot_df['gamete_type'] == scenario_short, perf_metric].median()
-                if pd.notna(the_median):
-                    ax2.axhline(the_median, color=SCENARIO_LINE_COLORS[scenario_short], linewidth=1.2,
-                                linestyle=(0, (5, 3)), alpha=0.9, zorder=3)
-            handles, labels = plot_ret.get_legend_handles_labels()
-            if plot_ret.legend_ is not None:
-                plot_ret.legend_.remove()
+                    logging.info(F'plotting {perf_metric} versus {feature} for {caller}')
+                    if scenario_independent:
+                        plot_ret = sns.scatterplot(data=plot_df, x=feature, y=perf_metric, ax=ax2,
+                                                   color=SCENARIO_NA_COLOR, alpha=0.125, rasterized=True)
+                    else:
+                        plot_ret = sns.scatterplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', style='gamete_type', ax=ax2, palette='colorblind', alpha=0.125, markers=['x', '+'], rasterized=True)
+                    # [FIX] explicit, documented skip: the KDE layer carries so much
+                    # vector graphics that the multipage PDF becomes enormous.
+                    # (CODE_v2 initialised this flag to 1, which silently skipped
+                    # *every* KDE plot; the behaviour is kept, but now it is named,
+                    # and skipping it for data reasons is still reported.)
+                    skip_kdeplot = SKIP_KDEPLOTS
+                    if not skip_kdeplot:
+                        for _gt, plot_df_2 in plot_df.groupby('gamete_type'):
+                            if len(set(plot_df_2[perf_metric])) == 1:
+                                skip_kdeplot = True
+                                logging.warning(F'KDEplot of {perf_metric} versus {feature} for {caller} skipped: the {_gt} values are constant')
+                    if skip_kdeplot:
+                        logging.debug(F'Skip the KDEplot of {perf_metric} versus {feature} for {caller}')
+                    else:
+                        if scenario_independent:
+                            sns.kdeplot(data=plot_df, x=feature, y=perf_metric, ax=ax2, color=SCENARIO_NA_COLOR,
+                                        levels=10, fill=True, alpha=0.5, legend=False)
+                        else:
+                            sns.kdeplot(data=plot_df, x=feature, y=perf_metric, hue='gamete_type', ax=ax2, palette='colorblind', levels=10, fill=True, alpha=0.5, legend=False)
+                # [NEW] one dashed reference line per scenario at that scenario's median performance,
+                # so that almost-tied callers can still be told apart in the supplementary pages
+                for scenario_short in ([SCENARIO_INDEPENDENT_TAG] if scenario_independent else SCENARIO_ORDER):
+                    the_median = plot_df.loc[plot_df['gamete_type'] == scenario_short, perf_metric].median()
+                    if pd.notna(the_median):
+                        ax2.axhline(the_median, color=SCENARIO_LINE_COLORS.get(scenario_short, '0.55'), linewidth=1.2,
+                                    linestyle=(0, (5, 3)), alpha=0.9, zorder=3)
+                _handles, _labels = plot_ret.get_legend_handles_labels()
+                if _labels:
+                    handles, labels = _handles, _labels
+                if plot_ret.legend_ is not None:
+                    plot_ret.legend_.remove()
             if feat_scale:
                 ax2.set_xscale(feat_scale)
             if feature in continuous_features:
@@ -1020,20 +1232,26 @@ def plot_onepage(page_args): # (continuous_features, categorical_features, the_p
                 # [FIX] single-line title: the caller name only. Caller names
                 # appear exactly ONCE per page (top row); the columns stay
                 # readable and the panels below carry no repeated names.
-                ax2.set_title(caller2desc.get(caller, caller), fontsize=18)
+                ax2.set_title(caller_display_name(caller), fontsize=18)
             ax2.set_xlabel('')
             if colidx == 0:
-                # [FIX] metric ID only (same ID as in the main figure)
-                ax2.set_ylabel(perf_metric, fontsize=15)
+                # [FIX] metric ID + its cell-type scope (same label as in the main figures)
+                ax2.set_ylabel(metric_display_name(perf_metric), fontsize=15)
             else:
                 ax2.set_ylabel('')
                 ax2.tick_params(labelleft=False)
             sns.despine(ax=ax2)
     # [FIX] legend centered at the top of the strip; entries side by side below
-    # the title. [STYLE] boxed, like every other legend in the script.
+    # the title. [STYLE] boxed, like every other legend in the script.  The 'N/A'
+    # key marks scenario-independent metrics (intCN_modal_frac), shown once in grey.
+    if labels:
+        handles, labels = list(handles) + [scenario_na_handle()], list(labels) + [SCENARIO_NA_LABEL]
+    else:
+        handles = gamete_legend_handles()
+        labels = [h.get_label() for h in handles]
     leg = legend_ax.legend(handles, labels,
             title=the_gamete_legend_title,
-            loc='upper center', ncol=2, frameon=True, fancybox=False,
+            loc='upper center', ncol=3, frameon=True, fancybox=False,
             framealpha=1.0, edgecolor='0.65', borderpad=0.6,
             fontsize=16, title_fontsize=16,
             markerscale=3, columnspacing=2.0)

@@ -83,6 +83,22 @@ TOOL_DISPLAY_NAMES = {
     'scabsolute': 'scAbsolute',
 }
 
+# Publication year appended to the caller name in the figure title, matching the
+# main caller figures (see CALLER_PUBLICATION in
+# bench_results/scWGS-performances-eval.py).
+TOOL_PUBLICATION_YEAR = {
+    'aneufinder': 2016,
+    'flcna'     : 2024,
+    'chisel'    : 2021,
+    'copynumber': 2012,
+    'ginkgo'    : 2015,
+    'hmmcopy'   : 2006,
+    'secnv'     : 2022,
+    'sccnv'     : 2020,
+    'scyn'      : 2021,
+    'scabsolute': 2024,
+}
+
 # Row-annotation (cluster) colour bar.  The CN scale runs dark blue (CN=0) -> white
 # (CN=2) -> dark red (CN>=3), so the annotation palette deliberately uses only green,
 # brown, grey, olive, amber, magenta and black hues: a cluster swatch can never be
@@ -102,8 +118,12 @@ ANNOTATION_LABEL_COLOUR = "#6a3d9a"
 
 
 def display_name(tool) -> str:
-    """Manuscript spelling of a caller key (e.g. 'ginkgo' -> 'Ginkgo')."""
-    return TOOL_DISPLAY_NAMES.get(str(tool).lower(), str(tool))
+    """Manuscript spelling + publication year of a caller key, e.g.
+    'ginkgo' -> 'Ginkgo 2015'."""
+    key = str(tool).lower()
+    name = TOOL_DISPLAY_NAMES.get(key, str(tool))
+    year = TOOL_PUBLICATION_YEAR.get(key)
+    return F'{name} {year}' if year else name
 
 
 def tidy_title(title: str) -> str:

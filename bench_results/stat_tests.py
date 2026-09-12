@@ -1274,7 +1274,7 @@ def main(argv=None):
     elif 'Caller' in df.columns:
         settings = run_caller_benchmark_stats(
             df, args.output,
-            perf_metrics=['accuracy', 'PCC_intCN', 'PCC_nonintCN', 'frac_cov_genome',
+            perf_metrics=['intCN_accuracy', 'intCN_PCC', 'nonintCN_PCC', 'CN_genome_cov_frac',
                           'breakpoint_precision', 'breakpoint_recall', 'breakpoint_f1score'],
             gamete_type2short={'with_haploidy_assumed_gametes': 'Hap_0',
                                'with_aneuploidy_aware_gametes': 'Hap_1'},

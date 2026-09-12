@@ -19,11 +19,17 @@
 #  [FIX 3] merge_bed_with_cn(): row[0]/row[1]/row[2] are integer keys on a label-indexed
 #          Series (deprecated; FutureWarning on pandas 2.x, hard KeyError on pandas 3.x).
 #          Now row.iloc[0]/iloc[1]/iloc[2].
-#  [FIX 4] bedset_to_consistency(): the four `bedtools intersect` outputs are glued with
-#          pd.concat(axis=1), which is positional; row-count asserts do not guarantee that
-#          the (chr, start, end) columns are identical AND in the same order.  Now the
-#          interval columns are asserted identical before concatenation, and the depth BED
-#          row count is asserted before the zip() that used to truncate silently.
+#  [FIX 4] bedset_to_consistency(): the four `bedtools intersect` outputs are aligned by
+#          their (chr, start, end) columns instead of being glued position-wise with
+#          pd.concat(axis=1).  Each intersect output follows the row order of its own -a
+#          file, and those -a files come from different pipeline steps (pre-sim call 1/2,
+#          simulated truth, post-sim call), so the same interval usually sits at a
+#          different row index in each file (measured on real chisel output: 626/733 rows
+#          at a different interval).  The old positional concat silently attached the
+#          truth and pre-sim CNs to the wrong intervals.  Intervals that are absent from
+#          any of the frames (a few bedtools zero-length/off-by-one artefacts) are dropped
+#          with a warning, a large mismatch (>5% of intervals) is an error, and the
+#          depth-based BED is aligned the same way instead of being zipped positionally.
 #  [FIX 5] The chained bedtools pipeline runs with `set -o pipefail`, so a failing
 #          intermediate command is no longer masked by the last command's exit code.
 #  [FIX 6] statsfile_to_avgdp(): returns None (rendered as JSON null) with a warning
@@ -37,12 +43,19 @@
 #          non-integer CN values with a clear message (previously: obscure TypeError from
 #          list indexing, or silent int() truncation of floats).
 #  [FIX 10] perf.json is now strict JSON: non-finite floats (NaN/Inf) are written as null
-#          and numpy scalars are converted through a json default= hook.
+#          and numpy scalars are converted through a json default= hook.  The consumer
+#          cnv_gather_results.py coerces the nulls back to NaN before its
+#          np.nanmean()/np.nanstd() calls.
 #  [FIX 11] --bp-window CLI option (default 200000, previously hardcoded).
 #  [FIX 12] breakpoint TP/FP/FN/n_obs/n_exp are reported in perf.json next to
 #          precision/recall, and evaluate_breakpoints() documents that both sides are
 #          derived from the shared caller segmentation (CN-transition consistency, not a
 #          raw-truth breakpoint benchmark).
+#  [NEW]   intCN_modal_frac: base-pair-weighted fraction of the CNV-call-covered genome that
+#          is assigned to the modal (most frequent) observed CN state.  It is computed
+#          from the caller's own calls and therefore scenario-independent (the same value
+#          is written under both ground-truth scenarios); in the normal (diploid)
+#          simulations the mode is CN=2 unless the caller's ploidy estimate is off.
 
 import argparse, collections, functools, json, logging, math, os, subprocess, sys
 import numpy as np
@@ -151,10 +164,28 @@ def cns2ploidy(cns, sizes):
     below = sum([(      1 * int(size)) for cn, size in zip(cns, sizes)])
     return nandiv(float(above), float(below))
 
+def modal_cn_fraction(cns, sizes):
+    """[NEW] Base-pair-weighted fraction of the covered genome whose observed copy number
+    equals the modal (most frequent) observed copy-number state.  In the normal (diploid)
+    simulations the mode is CN=2 unless the caller's ploidy estimate is off."""
+    weight_by_cn = collections.defaultdict(int)
+    for cn, size in zip(cns, sizes):
+        weight_by_cn[as_int_cn(cn, 'intCN_modal_frac CN')] += int(size)
+    total = sum(weight_by_cn.values())
+    if total <= 0:
+        return np.nan
+    return max(weight_by_cn.values()) / float(total)
+
 # cat /stor/zxf/cnv/refs/hg19.fa.dict | tail -n+2 | awk '{print $3}' | sed 's/LN://g'  | awk '{s += $1} END {print s}'
 # 3095677412
 # [FIX 7] hg19 default; override with --n-ref-bases.
 N_REF_BASES = 3095677412
+
+# [FIX 4] The four `bedtools intersect` outputs are supposed to describe the same genomic
+# intervals; a few bedtools boundary artefacts per file are normal, but a large mismatch
+# means the inputs do not come from the same segmentation and the metrics would be
+# silently computed on a biased subset of the genome.
+MAX_UNMATCHED_INTERVAL_FRACTION = 0.05
 
 def statsfile_to_avgdp(sim_bam_stats, n_ref_bases=N_REF_BASES):
     #SN      bases mapped (cigar):   568 526 831       # more accurate
@@ -250,6 +281,8 @@ def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200_000):
     expected CN changes.  The resulting precision/recall therefore measure CN-transition
     CONSISTENCY on the shared segmentation (with the approximate truth projected onto it),
     not a classic breakpoint benchmark against the raw truth interval segmentation.
+    Precision (recall) is reported as 0 when there is no observed (expected) CN
+    transition at all, because the ratio is undefined in that case.
     """
     obs_df_1 = merge_bed_with_cn(obs_df, obs_col)
     exp_df_1 = merge_bed_with_cn(exp_df, exp_col)
@@ -359,41 +392,54 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     approx_truth_df  = pd.read_csv(approx_truth_bed_inter  , sep='\t', header=0)
     post_sim_call_df = pd.read_csv(post_sim_call_bed_inter , sep='\t', header=0)
 
-    assert len(post_sim_call_df) == len(pre_sim_df_1),    F'{len(post_sim_call_df)} == {len(pre_sim_df_1)} failed!'
-    assert len(post_sim_call_df) == len(pre_sim_df_2),    F'{len(post_sim_call_df)} == {len(pre_sim_df_2)} failed!'
-    assert len(post_sim_call_df) == len(approx_truth_df), F'{len(post_sim_call_df)} == {len(approx_truth_df)} failed!'
-
-    # [FIX 4] The four intersect outputs are glued position-wise by pd.concat(axis=1)
-    # below, so their interval columns must be identical in BOTH values and row order;
-    # equal row counts alone do not guarantee that, and a violation would silently
-    # misassign every CN column to the wrong interval.
+    # [FIX 4] The four intersect outputs are NOT necessarily row-aligned: each output follows
+    # the row order of its own -a file, and those -a files come from different pipeline steps
+    # (pre-sim call 1/2, simulated truth, post-sim call), so the same genomic interval can sit
+    # at a different row index in each file.  Gluing them with pd.concat(axis=1) therefore
+    # attached the truth/pre-sim CNs of one interval to another interval, silently corrupting
+    # the expected CN and every metric derived from it.  Align the frames by their interval
+    # columns instead; the intervals that are absent from any frame are the bedtools
+    # zero-length/off-by-one overlap artefacts, dropped here and reported.
     interval_cols = [chrom_colname, start_colname, end_colname]
-    for df_name, other_df in (
-            ('pre_sim_call_bed_1', pre_sim_df_1),
-            ('pre_sim_call_bed_2', pre_sim_df_2),
-            ('approx_truth_bed'  , approx_truth_df)):
-        assert other_df[interval_cols].reset_index(drop=True).equals(post_sim_call_df[interval_cols].reset_index(drop=True)), (
-            F'Interval columns of {df_name} differ from {post_sim_call_bed_int_fname} (values or row order): '
-            F'the four "bedtools intersect" outputs are not 1:1, and pd.concat(axis=1) would silently misassign the CN columns. ')
+    n_post_intervals = len(post_sim_call_df)
+    merged_df = post_sim_call_df.merge(
+        pre_sim_df_1[interval_cols + ['obsCN']], on=interval_cols, how='inner',
+        validate='one_to_one', suffixes=('', '_pre1'))
+    merged_df = merged_df.merge(
+        pre_sim_df_2[interval_cols + ['obsCN']], on=interval_cols, how='inner',
+        validate='one_to_one', suffixes=('', '_pre2'))
+    merged_df = merged_df.merge(
+        approx_truth_df[interval_cols + ['majorCN', 'minorCN']], on=interval_cols,
+        how='inner', validate='one_to_one')
+    n_unmatched = n_post_intervals - len(merged_df)
+    if n_unmatched:
+        logging.warning(
+            F'{n_unmatched}/{n_post_intervals} interval(s) of {post_sim_call_bed_int_fname} are not '
+            'present in all four intersect files (bedtools boundary artefacts); they are excluded '
+            'from all metrics. ')
+    if len(merged_df) < (1.0 - MAX_UNMATCHED_INTERVAL_FRACTION) * n_post_intervals:
+        raise ValueError(
+            F'{n_unmatched}/{n_post_intervals} interval(s) of {post_sim_call_bed_int_fname} failed to align '
+            'with the pre-sim/truth intersect files: the inputs do not describe the same genomic '
+            'segmentation, so the consistency metrics would be computed on a biased subset. ')
 
-    merged_df = pd.concat([pre_sim_df_1, pre_sim_df_2, approx_truth_df, post_sim_call_df], axis=1)
-    merged_df['expMajorCN'] = (pre_sim_df_1['obsCN'] * approx_truth_df['majorCN'])
-    merged_df['expMinorCN'] = (pre_sim_df_2['obsCN'] * approx_truth_df['minorCN'])
+    merged_interval_size = merged_df[end_colname] - merged_df[start_colname]
+    merged_df['expMajorCN'] = merged_df['obsCN_pre1'] * merged_df['majorCN']
+    merged_df['expMinorCN'] = merged_df['obsCN_pre2'] * merged_df['minorCN']
     merged_df['expCN']      = merged_df['expMajorCN'] + merged_df['expMinorCN']
-    merged_df['approx_expCN'] = approx_truth_df['majorCN'] + approx_truth_df['minorCN']
+    merged_df['approx_expCN'] = merged_df['majorCN'] + merged_df['minorCN']
     #print(merged_df)
-    expCN_ploidy =        cns2ploidy(merged_df['expCN'],        post_sim_call_df[end_colname] - post_sim_call_df[start_colname])
-    approx_expCN_ploidy = cns2ploidy(merged_df['approx_expCN'], post_sim_call_df[end_colname] - post_sim_call_df[start_colname])
-    obsCN_ploidy =        cns2ploidy(post_sim_call_df['obsCN'], post_sim_call_df[end_colname] - post_sim_call_df[start_colname])
+    expCN_ploidy =        cns2ploidy(merged_df['expCN'],        merged_interval_size)
+    approx_expCN_ploidy = cns2ploidy(merged_df['approx_expCN'], merged_interval_size)
+    obsCN_ploidy =        cns2ploidy(merged_df['obsCN'],        merged_interval_size)
+    obsCN_mode_frac =     modal_cn_fraction(merged_df['obsCN'], merged_interval_size)   # [NEW]
 
     obsCN_bed1_ploidy =   cns2ploidy(pre_sim_df_1['obsCN'], pre_sim_df_1[end_colname] - pre_sim_df_1[start_colname])
     obsCN_bed2_ploidy =   cns2ploidy(pre_sim_df_2['obsCN'], pre_sim_df_2[end_colname] - pre_sim_df_2[start_colname])
 
     bp_cols   = [chrom_colname, start_colname, end_colname]
-    obs_bp_df = post_sim_call_df[bp_cols + ['obsCN']].copy()
-    exp_bp_df = post_sim_call_df[bp_cols].copy()
-    exp_bp_df['expCN']        = merged_df['expCN'].values
-    exp_bp_df['approx_expCN'] = merged_df['approx_expCN'].values
+    obs_bp_df = merged_df[bp_cols + ['obsCN']].copy()
+    exp_bp_df = merged_df[bp_cols + ['expCN', 'approx_expCN']].copy()
 
     exact_breakpoint_metrics  = evaluate_breakpoints(obs_bp_df, 'obsCN', exp_bp_df, 'expCN',        window_size=bp_window)   # [FIX 11]
     approx_breakpoint_metrics = evaluate_breakpoints(obs_bp_df, 'obsCN', exp_bp_df, 'approx_expCN', window_size=bp_window)   # [FIX 11]
@@ -402,7 +448,7 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     for expCN_colname in ['expCN', 'approx_expCN']:
         confusion_matrix_int = [([0]*(8+1)) for _ in range(8+1)]
         obs_exp_to_cn = collections.defaultdict()
-        for obsCN, expCN, genomesize in zip(post_sim_call_df['obsCN'], merged_df[expCN_colname], post_sim_call_df[end_colname] - post_sim_call_df[start_colname]):
+        for obsCN, expCN, genomesize in zip(merged_df['obsCN'], merged_df[expCN_colname], merged_interval_size):
             obsCN = as_int_cn(obsCN, 'obsCN')                   # [FIX 9]
             expCN = as_int_cn(expCN, 'expCN')                   # [FIX 9]
             assert obsCN >= 0, f"The obsCN={obsCN} is invalid!"
@@ -412,21 +458,28 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         genome_size, accuracy = cmat_to_genome_size_and_accuracy(confusion_matrix_int)
         if post_sim_call_bed_dep_fname:
             post_sim_call_df_by_DP = pd.read_csv(post_sim_call_bed_by_DP_inter, sep='\t', header=0)
-            # [FIX 4] the zip() below used to truncate silently if the DP file had fewer rows.
-            assert len(post_sim_call_df_by_DP) == len(post_sim_call_df), (
-                F'{len(post_sim_call_df_by_DP)} == {len(post_sim_call_df)} failed: '
-                F'the depth-based BED is not 1:1 with the CN-based BED. ')
-            xyw = [(obsRD, expCN, genomesize) for
-                    obsRD, expCN, genomesize in
-                    zip(post_sim_call_df_by_DP['obsDP'], merged_df[expCN_colname], post_sim_call_df[end_colname] - post_sim_call_df[start_colname])]
-            x, y, w = zip(*xyw)
-            w_lin_corr_coef_byDP = weighted_lin_corr_coef(x, y, w)
+            # [FIX 4] Align the depth BED by interval as well; zipping it positionally would
+            # silently pair depths with the wrong intervals if its row order differs, and an
+            # equal row count alone does not prove alignment.
+            dp_merged_df = merged_df[interval_cols + [expCN_colname]].merge(
+                post_sim_call_df_by_DP[interval_cols + ['obsDP']], on=interval_cols,
+                how='inner', validate='one_to_one')
+            n_dp_unmatched = len(merged_df) - len(dp_merged_df)
+            if n_dp_unmatched:
+                logging.warning(
+                    F'{n_dp_unmatched}/{len(merged_df)} interval(s) of {post_sim_call_bed_dep_fname} do not '
+                    'align with the CN intervals; the depth-based PCC excludes them. ')
+            dp_interval_size = dp_merged_df[end_colname] - dp_merged_df[start_colname]
+            xyw = list(zip(dp_merged_df['obsDP'], dp_merged_df[expCN_colname], dp_interval_size))
+            if xyw:
+                x, y, w = zip(*xyw)
+                w_lin_corr_coef_byDP = weighted_lin_corr_coef(x, y, w)
+            else:
+                w_lin_corr_coef_byDP = np.nan
         else:
             w_lin_corr_coef_byDP = np.nan
         if True:
-            xyw = [(obsRD, expCN, genomesize) for
-                    obsRD, expCN, genomesize in
-                    zip(post_sim_call_df['obsCN'], merged_df[expCN_colname], post_sim_call_df[end_colname] - post_sim_call_df[start_colname])]
+            xyw = list(zip(merged_df['obsCN'], merged_df[expCN_colname], merged_interval_size))
             if xyw:
                 x, y, w = zip(*xyw)
                 w_lin_corr_coef_byCN = weighted_lin_corr_coef(x, y, w)
@@ -461,10 +514,11 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio' : nandiv(float(obsCN_ploidy), float(expCN_ploidy)),   # [FIX 8] NaN-safe division
         'with_aneuploidy_aware_gametes.genome_size'     : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][0],
 
-        'with_aneuploidy_aware_gametes.accuracy'        : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][1],
-        'with_aneuploidy_aware_gametes.PCC_intCN'       : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][2],
-        'with_aneuploidy_aware_gametes.PCC_nonintCN'    : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][3],
-        'with_aneuploidy_aware_gametes.frac_cov_genome' : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][0] / float(n_ref_bases),   # [FIX 7]
+        'with_aneuploidy_aware_gametes.intCN_accuracy'      : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][1],
+        'with_aneuploidy_aware_gametes.intCN_PCC'           : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][2],
+        'with_aneuploidy_aware_gametes.nonintCN_PCC'        : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][3],
+        'with_aneuploidy_aware_gametes.CN_genome_cov_frac'  : expCN_to_genome_size_accuracy_w_lin_corr_coef['expCN'][0] / float(n_ref_bases),   # [FIX 7]
+        'with_aneuploidy_aware_gametes.intCN_modal_frac'    : obsCN_mode_frac,   # [NEW] scenario-independent (observed calls only)
 
         'with_aneuploidy_aware_gametes.breakpoint_n_obs'     : exact_breakpoint_metrics['n_obs'],     # [FIX 12]
         'with_aneuploidy_aware_gametes.breakpoint_n_exp'     : exact_breakpoint_metrics['n_exp'],     # [FIX 12]
@@ -479,10 +533,11 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         'with_haploidy_assumed_gametes.obs2exp_ploidy_ratio' : nandiv(float(obsCN_ploidy), float(approx_expCN_ploidy)),   # [FIX 8] NaN-safe division
         'with_haploidy_assumed_gametes.genome_size'     : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][0],
 
-        'with_haploidy_assumed_gametes.accuracy'        : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][1],
-        'with_haploidy_assumed_gametes.PCC_intCN'       : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][2],
-        'with_haploidy_assumed_gametes.PCC_nonintCN'    : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][3],
-        'with_haploidy_assumed_gametes.frac_cov_genome' : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][0] / float(n_ref_bases),   # [FIX 7]
+        'with_haploidy_assumed_gametes.intCN_accuracy'     : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][1],
+        'with_haploidy_assumed_gametes.intCN_PCC'          : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][2],
+        'with_haploidy_assumed_gametes.nonintCN_PCC'       : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][3],
+        'with_haploidy_assumed_gametes.CN_genome_cov_frac' : expCN_to_genome_size_accuracy_w_lin_corr_coef['approx_expCN'][0] / float(n_ref_bases),   # [FIX 7]
+        'with_haploidy_assumed_gametes.intCN_modal_frac'   : obsCN_mode_frac,   # [NEW] scenario-independent (observed calls only)
 
         'with_haploidy_assumed_gametes.breakpoint_n_obs'     : approx_breakpoint_metrics['n_obs'],    # [FIX 12]
         'with_haploidy_assumed_gametes.breakpoint_n_exp'     : approx_breakpoint_metrics['n_exp'],    # [FIX 12]
@@ -522,12 +577,11 @@ def main():
     parser.add_argument('--chrom', required=False, default='#chr_37', help='Chromosome column name in BED files. ')
     parser.add_argument('--start', required=False, default='start_37', help='Chromosome start position column name in BED files. ')
     parser.add_argument('--end'  , required=False, default='end_37', help='Chromosome end position column name in BED files. ')
-    parser.add_argument('--bp-window'  , required=False, type=int, default=200_000     , help='Max distance (bp) for matching an observed breakpoint to an expected one. ')             # [FIX 11]
-    parser.add_argument('--n-ref-bases', required=False, type=int, default=N_REF_BASES , help='Total number of reference bases (denominator of the average depth, and the genome size used by frac_cov_genome; default is hg19). ')   # [FIX 7]
+    parser.add_argument('--bp-window'  , required=False, type=int, default=200_000     , help='Max distance (bp) for matching an observed breakpoint to an expected one. Set it to at least the caller grid resolution: with e.g. 5 Mb bins, a truth breakpoint inside a bin cannot match the caller bin boundary within the 200 kb default. ')             # [FIX 11]
+    parser.add_argument('--n-ref-bases', required=False, type=int, default=N_REF_BASES , help='Total number of reference bases (denominator of the average depth, and the genome size used by CN_genome_cov_frac; default is hg19). ')   # [FIX 7]
 
     args = parser.parse_args()
     consistency = bedset_to_consistency(args.pre_sim_call_bed_1, args.pre_sim_call_bed_2, args.approx_truth_bed, args.post_sim_call_bed, args.post_sim_call_bed_by_DP, args.sim_bam_stats,
             args.chrom, args.start, args.end, n_ref_bases=args.n_ref_bases, bp_window=args.bp_window)
 
 if __name__ == '__main__': main()
-
