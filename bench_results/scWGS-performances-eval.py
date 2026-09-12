@@ -76,7 +76,7 @@ def _perf_legend(ref_desc, ref_is_constant_column=True):
     return (
         'Pairwise comparison of CNV-calling performance between the reference caller '
         F'{ref_clause} and each other caller ($b$). '
-        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the near-haploid cells are '
+        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the haploid cells are '
         'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
         '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
         'from the pre-simulated data (Fig.~1a). $p$ values are two-sided Wilcoxon '
@@ -383,13 +383,13 @@ logscale_features = [
 CONTINUOUS_FEATURES_NAME2DESC = {
     # benchmarking-strategy-dependent
     'with_aneuploidy_aware_gametes.obs2exp_ploidy_ratio': 'Ratio of the observed (called) ploidy to the expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_1). '  # [REV]
-            '\nThe ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data. ',
+            '\nThe ground-truth CNs of the haploid cells are the CNs called by the same caller from the pre-simulated data. ',
     'with_haploidy_assumed_gametes.obs2exp_ploidy_ratio': 'Ratio of the observed (called) ploidy to the expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_0). '  # [REV]
-            '\nThe ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
+            '\nThe ground-truth CNs of the haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
     'with_aneuploidy_aware_gametes.expected_ploidy': 'Expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_1). '  # [REV]
-            '\nThe ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data. ',
+            '\nThe ground-truth CNs of the haploid cells are the CNs called by the same caller from the pre-simulated data. ',
     'with_haploidy_assumed_gametes.expected_ploidy': 'Expected (ground-truth) ploidy of each simulated cell (Fig. 1a, path Hap_0). '  # [REV]
-            '\nThe ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
+            '\nThe ground-truth CNs of the haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome). ',
     # sample-dependent
     'average_seq_depth': 'Average sequencing depth of each simulated cell',  # [REV]
     'raw_total_sequences': 'Total number of sequenced reads of each simulated cell',  # [REV]
@@ -399,25 +399,25 @@ CONTINUOUS_FEATURES_NAME2DESC = {
     'CNA_percent': 'Percentage of the genome affected by the simulated copy-number alterations (CNAs)',  # [REV]
     # result-dependent
     'observed_ploidy': 'Ploidy of each simulated cell, as observed (called) by the copy-number caller',  # [REV]
-    'bed_1_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
-    'bed_1_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
-    'bed_1_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the first of the two merged near-haploid samples',  # [REV]
-    'bed_2_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
-    'bed_2_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
-    'bed_2_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the second of the two merged near-haploid samples',  # [REV]
+    'bed_1_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the first of the two merged haploid samples',  # [REV]
+    'bed_1_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the first of the two merged haploid samples',  # [REV]
+    'bed_1_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the first of the two merged haploid samples',  # [REV]
+    'bed_2_cn0_genome_size': 'Number of base pairs with copy number (CN) = 0 called by the same caller from the second of the two merged haploid samples',  # [REV]
+    'bed_2_cn1_genome_size': 'Number of base pairs with copy number (CN) = 1 called by the same caller from the second of the two merged haploid samples',  # [REV]
+    'bed_2_cn2plus_genome_size': 'Number of base pairs with copy number (CN) > 1 called by the same caller from the second of the two merged haploid samples',  # [REV]
 }
 
 continuous_features = list(CONTINUOUS_FEATURES_NAME2DESC.keys())
 
 CATEGORICAL_FEATURES_NAME2DESC = {
     # sample-dependent
-    'donor': 'The human donor from whom the near-haploid cells were derived',  # [REV]
-    'sampleType' : 'Cell type of the near-haploid cells (e.g., sperm, polar body, or female pronucleus)',  # [REV]
+    'donor': 'The human donor from whom the haploid cells were derived',  # [REV]
+    'sampleType' : 'Cell type of the haploid cells (e.g., sperm, polar body, or female pronucleus)',  # [REV]
     'avgSpotLen' : 'Average spot length (i.e., sequencing read length), which depends on the single-cell sequencing technology', # a few unique values  # [REV]
     # simulation-dependent
     'overall_ploidy' : 'Overall ploidy of the simulated cells, either diploid or aneuploid', # diploid or aneuploid  # [REV]
     'cellLine' : 'Cancer cell line (e.g., COLO-829, HCC1395, or HeLa) whose copy-number profile is emulated by the simulation',  # [REV]
-    'n_samples_mixed' : 'Number of near-haploid samples merged to simulate each cell (a technical detail)', # 1 or 2, as computed below from accession_1 vs accession_2  # [REV]
+    'n_samples_mixed' : 'Number of haploid samples merged to simulate each cell (a technical detail)', # 1 or 2, as computed below from accession_1 vs accession_2  # [REV]
 }
 
 categorical_features = list(CATEGORICAL_FEATURES_NAME2DESC.keys())
@@ -596,8 +596,8 @@ gamete_type_to_perf_metrics = {
 }
 
 gamete_type2desc = {  # verbose: caption only
-    'with_haploidy_assumed_gametes': 'Haploidy-assumed (path Hap_0): the ground-truth CNs of the near-haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome)',  # [REV]
-    'with_aneuploidy_aware_gametes': 'Aneuploidy-aware (path Hap_1): the ground-truth CNs of the near-haploid cells are the CNs called by the same caller from the pre-simulated data',  # [REV]
+    'with_haploidy_assumed_gametes': 'Haploidy-assumed (path Hap_0): the ground-truth CNs of the haploid cells are assumed to be one-valued vectors (i.e., CN = 1 across the whole genome)',  # [REV]
+    'with_aneuploidy_aware_gametes': 'Aneuploidy-aware (path Hap_1): the ground-truth CNs of the haploid cells are the CNs called by the same caller from the pre-simulated data',  # [REV]
 }
 
 # [FIX] The figures carry only these short tags; their meaning is stated exactly once,

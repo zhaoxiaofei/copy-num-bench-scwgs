@@ -22,7 +22,7 @@ def main():
             'SraRunTable in TSV format containing the columns '
             '#Run, AvgSpotLen, Library~Name, Sample~Name, sample-type, Oocyte_ID, Donor, and SRA~Study'))
     parser.add_argument('--tumor-fastq', action='store_true', help=(
-        'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of near-haploid germline samples). '
+        'Treat --SraRunTable as a list of real tumor FASTQ samples (instead of haploid germline samples). '
         'When set, only alignment + CNV calling + clustermap are run; the haplotype-mixing simulation is skipped.'))
     parser.add_argument('--fqs', nargs='+', default=None)
     parser.add_argument('--fastq-layout', choices=cm.FASTQ_LAYOUTS, default=cm.FASTQ_LAYOUT_DEFAULT, help=(
