@@ -267,7 +267,7 @@ if [[ "${SKIP_FIG4}" != 1 ]]; then
     fi
     log "step 5/6: merging the per-caller heatmaps into ${HEATMAP_PDF}"
     cd "${REPO}"
-    python cnv_heatmap_montage.py -i "${HG008_DIR}/${HG008_STEM}"*_clustermap.pdf \
+    python cnv_heatmap_montage.py -i "${HG008_DIR}/${HG008_STEM}"*_clustermap.png \
         -o "${HEATMAP_PDF}"
 else
     log "step 5/6: HG008 figures skipped (SKIP_FIG4=1)"
