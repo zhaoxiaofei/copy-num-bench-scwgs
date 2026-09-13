@@ -140,7 +140,12 @@ deliberately not included -- see [Input data](#3-input-data).
 
 Step 5 copies these files into `raw_figs/` under the exact names the SI LaTeX expects, and
 additionally as `Fig2_...`-`Fig5_...` PNG/PDF pairs that can be pasted into the Word files
-(the main-text figures are pictures inside the `.docx` files).
+(the main-text figures are pictures inside the `.docx` files).  It also copies the pairwise
+booktabs LaTeX tables written by `bench_results/scWGS-performances-eval.py` and
+`bench_results/scWGS-ploidy-performances-eval.py`
+(`${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex` and
+`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`), which `cnb-g-9-supp-FigsAndTables-k.tex` uses
+for Supplementary Tables S2 and S3.
 
 ```
 # Run from the repository root; the paths below follow the layout of the sections above:
@@ -231,6 +236,9 @@ cp "${HG008}/${HG008_STEM}"*_ginkgo_clustermap.png "${DEST}/Fig4_HG008_ginkgo_he
 cp "${HG008}/${HG008_STEM}"*_ginkgo_clustermap.pdf "${DEST}/Fig4_HG008_ginkgo_heatmap.pdf"
 cp "${SCRNA}/heatmaps/swarm_grid_metric_by_method.pdf.png" "${DEST}/Fig5_scRNA_swarm_grid.png"
 cp "${SCRNA}/heatmaps/swarm_grid_metric_by_method.pdf"     "${DEST}/Fig5_scRNA_swarm_grid.pdf"
+# pairwise booktabs LaTeX tables used by the SI (Supplementary Tables S2-S3)
+cp "${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex" "${DEST}/"
+cp "${PLOIDY_PREFIX}.pooled.stats.pairwise.tex" "${DEST}/"
 ```
 
 Notes:
@@ -267,6 +275,12 @@ into `${DEST}`.  The default is
 e.g. `raw_figs_4f7495b-dirty`), so every run lands in a directory that identifies the code
 version that produced its display items; a `DEST` given on the command line gets the same
 suffix appended (the directory is created if missing):
+
+The copy step also places the pairwise booktabs LaTeX tables used by
+`cnb-g-9-supp-FigsAndTables-k.tex` into `${DEST}`:
+`${PREFIX}.plots.stats.pairwise.tex` and
+`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`.  A versioned directory therefore contains the
+display items together with the LaTeX source of Supplementary Tables S2 and S3.
 
 Both code repositories' commit ids, `-clean`/`-dirty` state, commit messages and full
 uncommitted diffs are printed once at the very start and once at the very end of the run
@@ -306,8 +320,8 @@ Switches (0 = run, 1 = skip):
 
 Further variables: `CORES` (default 200), `SCRNA_CORES` (default 80), `CONDA_ENV` (default
 `copy-num-bench-scwgs`; `CONDA_ENV=""` keeps the current environment), `REPO`, `DATA`,
-`REAL`, `SCRNA`, `MANUSCRIPT`, `DEST`, `PREFIX`, `PLOIDY_PREFIX`, `HEATMAP_PDF`,
-`HG008_DONOR`, `GIT_SNAPSHOT_TXT` (default
+`REAL`, `SCRNA`, `MANUSCRIPT`, `DEST`, `PREFIX`, `PLOIDY_PREFIX`, `STATS_TEX`,
+`PLOIDY_STATS_TEX`, `HEATMAP_PDF`, `HG008_DONOR`, `GIT_SNAPSHOT_TXT` (default
 `${REPO}/bench_results/entire_pipeline.git-snapshot.txt`).  The code-version suffix
 (`<commit id>-<clean|dirty>` of this repository) is always appended to `DEST`.
 

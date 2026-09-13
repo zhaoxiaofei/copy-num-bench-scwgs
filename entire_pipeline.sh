@@ -19,6 +19,8 @@
 #   Fig. 4 + SI S23-S30  HG008 per-caller heatmaps + ${HEATMAP_PDF}
 #   Fig. 5 + SI S31-S36  ${SCRNA}/heatmaps/swarmHeatmap_*.pdf, swarm_grid_metric_by_method.*
 #   Table S1             ${SCRNA}/heatmaps/dataset_summary.tsv
+#   SI Table source      ${STATS_TEX}, ${PLOIDY_STATS_TEX} (the booktabs LaTeX tables
+#                        used by cnb-g-9-supp-FigsAndTables-k.tex)
 #   Provenance           ${GIT_SNAPSHOT_TXT} (copied into ${DEST} at the very end)
 #   Fig. 1               not code-generated (hand-drawn scheme)
 #
@@ -40,6 +42,9 @@
 # scripts unconditionally - individual failures are tolerated (e.g. SCYN), so they do
 # not fail the pipeline; RERUN_HEATMAPS=0 keeps the existing heatmaps and only merges
 # the montage.  RECOMPILE_SI=1 (default 0) recompiles the SI LaTeX in ${MANUSCRIPT}.
+# The booktabs LaTeX tables written by the two evaluation scripts (${STATS_TEX} and
+# ${PLOIDY_STATS_TEX}, used by cnb-g-9-supp-FigsAndTables-k.tex) are copied into ${DEST}
+# with the other display items.
 #
 # Both code repositories (${REPO} and ${SCRNA}) are reported with their commit id,
 # a -clean/-dirty suffix, the commit message and - when dirty - the full uncommitted
@@ -78,6 +83,11 @@ case "${DEST_BASE}" in
 esac
 PREFIX=${PREFIX:-${REPO}/bench_results/bench-results-26-07-15-updated}
 PLOIDY_PREFIX=${PLOIDY_PREFIX:-${PREFIX}.ploidy-plots}
+# Booktabs LaTeX tables written by scWGS-performances-eval.py and
+# scWGS-ploidy-performances-eval.py; the SI (cnb-g-9-supp-FigsAndTables-k.tex) uses
+# them for Supplementary Tables S2 and S3, so they are copied into ${DEST} as well.
+STATS_TEX=${STATS_TEX:-${PREFIX}.plots.stats.pairwise.tex}
+PLOIDY_STATS_TEX=${PLOIDY_STATS_TEX:-${PLOIDY_PREFIX}.pooled.stats.pairwise.tex}
 HEATMAP_PDF=${HEATMAP_PDF:-${REPO}/bench_results/cnv-heatmap.pdf}
 GIT_SNAPSHOT_TXT=${GIT_SNAPSHOT_TXT:-${REPO}/bench_results/entire_pipeline.git-snapshot.txt}
 HG008_DONOR=${HG008_DONOR:-SRP047086_GIAB-HG008}
@@ -290,7 +300,7 @@ fi
 # Step: copy the display items into the manuscript directory
 # ---------------------------------------------------------------------------------
 if [[ "${SKIP_COPY}" != 1 ]]; then
-    log "copying the display items into ${DEST}"
+    log "copying the display items and the pairwise LaTeX tables into ${DEST}"
     mkdir -p "${DEST}"
 
     # --- files that the SI LaTeX files include directly (exact names) --------------
@@ -320,6 +330,11 @@ if [[ "${SKIP_COPY}" != 1 ]]; then
           "${DEST}/Fig5_scRNA_swarm_grid.png"
     cp -v "${SCRNA}/heatmaps/swarm_grid_metric_by_method.pdf" \
           "${DEST}/Fig5_scRNA_swarm_grid.pdf"
+
+    # --- booktabs LaTeX tables written by the statistical tests ---------------------
+    # These are the tables used by cnb-g-9-supp-FigsAndTables-k.tex (Supplementary
+    # Tables S2 and S3); keep a copy next to the figures/tables they describe.
+    cp -v "${STATS_TEX}" "${PLOIDY_STATS_TEX}" "${DEST}/"
 else
     log "copy step skipped (SKIP_COPY=1)"
 fi
