@@ -20,7 +20,10 @@
 #   Fig. 5 + SI S31-S36  ${SCRNA}/heatmaps/swarmHeatmap_*.pdf, swarm_grid_metric_by_method.*
 #   Table S1             ${SCRNA}/heatmaps/dataset_summary.tsv
 #   SI Table source      ${STATS_TEX}, ${PLOIDY_STATS_TEX} (the booktabs LaTeX tables
-#                        used by cnb-g-9-supp-FigsAndTables-k.tex)
+#                        used by cnb-g-9-supp-FigsAndTables-k.tex) and
+#                        ${SCRNA}/heatmaps/stats.pairwise.tex (the scRNA-seq
+#                        caller pairwise table: n, p, r, 95% CI of r, when the
+#                        companion repository has produced it)
 #   Provenance           ${GIT_SNAPSHOT_TXT} (copied into ${DEST} at the very end)
 #   Fig. 1               not code-generated (hand-drawn scheme)
 #
@@ -44,7 +47,12 @@
 # the montage.  RECOMPILE_SI=1 (default 0) recompiles the SI LaTeX in ${MANUSCRIPT}.
 # The booktabs LaTeX tables written by the two evaluation scripts (${STATS_TEX} and
 # ${PLOIDY_STATS_TEX}, used by cnb-g-9-supp-FigsAndTables-k.tex) are copied into ${DEST}
-# with the other display items.
+# with the other display items, together with the scRNA-seq caller pairwise table
+# (${SCRNA}/heatmaps/stats.pairwise.tex, expected to carry the same four statistics
+# per comparison: n, p, r and the 95% CI of r).  That file belongs to the companion
+# scRNA-seq repository; when it is absent - the companion repository does not
+# produce it yet, and it is also absent whenever the scRNA figures step was skipped -
+# the copy only warns, so the pipeline never fails on it.
 #
 # Both code repositories (${REPO} and ${SCRNA}) are reported with their commit id,
 # a -clean/-dirty suffix, the commit message and - when dirty - the full uncommitted
@@ -335,6 +343,17 @@ if [[ "${SKIP_COPY}" != 1 ]]; then
     # These are the tables used by cnb-g-9-supp-FigsAndTables-k.tex (Supplementary
     # Tables S2 and S3); keep a copy next to the figures/tables they describe.
     cp -v "${STATS_TEX}" "${PLOIDY_STATS_TEX}" "${DEST}/"
+    # --- scRNA-seq caller pairwise table (n, p, r, 95% CI of r) ---------------------
+    # Produced by the companion scRNA-seq repository (if at all); this repository
+    # only copies it.  A missing file only warns - it is absent whenever that
+    # repository does not write it (it does not today) or when the scRNA figures
+    # step was skipped (SKIP_FIG5=1) - so the copy step must not fail on it.
+    if [[ -f "${SCRNA}/heatmaps/stats.pairwise.tex" ]]; then
+        cp -v "${SCRNA}/heatmaps/stats.pairwise.tex" "${DEST}/"
+    else
+        printf 'note: %s not found (the scRNA-seq figures step was skipped or not yet run); table not copied\n' \
+               "${SCRNA}/heatmaps/stats.pairwise.tex" >&2
+    fi
 else
     log "copy step skipped (SKIP_COPY=1)"
 fi

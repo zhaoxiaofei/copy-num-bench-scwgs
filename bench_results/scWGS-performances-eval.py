@@ -33,13 +33,14 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(filename)s %(level
 # --------------------------------------------------------------------------- #
 # The statistical tests write <output>.stats.pairwise.tsv (see README.md).
 # This block turns the important part of that file -- the pairwise rows of the
-# two ground-truth scenarios (scenario in {Hap_0, Hap_1}) restricted to the
-# columns (scenario, metric, caller_a, caller_b, pvalue_holm) -- into a
-# copy-paste-ready booktabs LaTeX table.  [REV v3] The table is pivoted: each
-# row is one (metric, caller_b) pair and the two numeric columns hold the
-# Holm-adjusted P values for Hap_0 and Hap_1 respectively, so the two
-# ground-truth scenarios can be compared side by side.  With --stats-all-pairs
-# a Caller-$a$ column is added to identify the pair.
+# two ground-truth scenarios (scenario in {Hap_0, Hap_1}) -- into a
+# copy-paste-ready booktabs LaTeX table.  [REV v4] Each row is one (metric,
+# caller_b) comparison; the two ground-truth scenarios each own ONE group of
+# four sub-columns that carries exactly, in this order and nothing else:
+# the effective sample size n (number of donors), the Holm-adjusted two-sided
+# p, the effect size r (matched-pairs rank-biserial correlation) and the 95%
+# bootstrap CI of r.  With --stats-all-pairs the compared pairs are not all
+# referenced to one caller, so a Caller-$a$ column is added to identify pairs.
 # [REV] By default the same table is ALSO written to
 # <output>.stats.pairwise.tex after every successful stats run
 # (--no-latex-table disables this); --latex-table additionally prints it to
@@ -69,22 +70,62 @@ def _format_reference(reference):
 
 
 def _perf_legend(ref_desc, ref_is_constant_column=True):
-    """Table legend for the CNV-calling performance pairwise table."""
+    """Table legend for the CNV-calling performance pairwise table.
+
+    [REV v4] Describes exactly the four reported statistics per scenario
+    (n, p, r, 95% CI of r), matching the table columns.
+    """
     ref_clause = (F'({ref_desc})'
                   if ref_is_constant_column else
                   F'($a$; see the Caller $a$ column, {ref_desc} by default)')
     return (
         'Pairwise comparison of CNV-calling performance between the reference caller '
-        F'{ref_clause} and each other caller ($b$). '
-        'Hap\\_0 (haploidy-assumed): the ground-truth CNs of the haploid cells are '
-        'assumed to be one-valued vectors (CN = 1 across the whole genome); Hap\\_1 '
-        '(aneuploidy-aware): the ground-truth CNs are the CNs called by the same caller '
-        'from the pre-simulated data (Fig.~1a). $p$ values are two-sided Wilcoxon '
-        'signed-rank tests on per-donor medians of the paired per-cell differences '
-        '(reference vs.\\ caller $b$), Holm--Bonferroni-adjusted within each (scenario, '
-        'metric) family; bold values are significant at the 0.05 family-wise level. '
+        F'{ref_clause} and each other caller ($b$), for the two ground-truth '
+        'derivations Hap\\_0 (haploidy-assumed) and Hap\\_1 (aneuploidy-aware; Fig.~1a). '
+        'Each scenario reports, in this order: $n$, the effective sample size (number '
+        'of donors whose paired per-cell differences enter the test); $p$, the '
+        'two-sided Wilcoxon signed-rank test on per-donor medians of the paired '
+        'per-cell differences (reference vs.\\ caller $b$), Holm--Bonferroni-adjusted '
+        'within each (scenario, metric) family, bold at the 0.05 family-wise level; '
+        '$r$, the matched-pairs rank-biserial correlation on the per-donor medians '
+        '(positive means the reference outperforms caller $b$); and the 95\\% '
+        'percentile-bootstrap CI of $r$ obtained by resampling the donors. '
         'CN, copy number.'
     )
+
+
+def _fmt_effect(x, decimals=2):
+    """Format an effect-size cell (rank-biserial r); missing values become '--'."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return '--'
+    if x != x or x in (float('inf'), float('-inf')):  # NaN / inf
+        return '--'
+    return F'{x:.{decimals}f}'
+
+
+def _fmt_signed_int(x):
+    """Format an effective-sample-size cell; missing values become '--'."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return '--'
+    if x != x or x in (float('inf'), float('-inf')):  # NaN / inf
+        return '--'
+    return F'{int(round(x)):d}'
+
+
+def _fmt_ci(low, high, decimals=2):
+    """Format a 95% confidence-interval cell as '[low, high]'; missing -> '--'."""
+    try:
+        lo, hi = float(low), float(high)
+    except (TypeError, ValueError):
+        return '--'
+    if lo != lo or hi != hi or lo in (float('inf'), float('-inf')) \
+            or hi in (float('inf'), float('-inf')):
+        return '--'
+    return F'[{lo:.{decimals}f}, {hi:.{decimals}f}]'
 
 
 def _tex_escape(s):
@@ -126,24 +167,40 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
                        table_label='tab:pairwise', alpha=0.05):
     """Build the booktabs LaTeX table from a *.stats.pairwise.tsv file.
 
-    [REV v3] Only the pairwise rows of the two ground-truth scenarios
-    (scenario in {Hap_0, Hap_1}) are kept.  The table is pivoted so that each
-    row is one (metric, caller_b) pair and the two numeric columns hold the
-    Holm-adjusted P values for Hap_0 and Hap_1 respectively.  With
-    --stats-all-pairs the compared pairs are not all referenced to one caller,
-    so a Caller-$a$ column is added to identify pairs.  Returns the list of
-    table lines, or None on any problem (a reason is logged).
+    [REV v4] Only the pairwise rows of the two ground-truth scenarios
+    (scenario in {Hap_0, Hap_1}) are kept.  Each row is one (metric,
+    [caller_a,] caller_b) comparison; each ground-truth scenario owns ONE
+    group of four sub-columns carrying exactly, in this order and nothing
+    else: n (effective sample size = number of donors), p (Holm-adjusted
+    two-sided Wilcoxon P), r (matched-pairs rank-biserial effect size) and
+    the 95% percentile-bootstrap CI of r.  With --stats-all-pairs the compared
+    pairs are not all referenced to one caller, so a Caller-$a$ column is
+    added to identify pairs.  Returns the list of table lines, or None on any
+    problem (a reason is logged).
     """
     if not os.path.isfile(tsv_path):
         logging.error('pairwise stats file not found: %s', tsv_path)
         logging.error('run the script with the statistical tests enabled (default) to generate it first')
         return None
     tab = pd.read_csv(tsv_path, sep='\t')
-    for col in ('scenario', 'metric', 'caller_b', 'pvalue_holm'):
-        if col not in tab.columns:
-            logging.error('column %r missing from %s (available: %s)',
-                          col, tsv_path, ', '.join(map(str, tab.columns)))
-            return None
+    # n column: the donor/cluster count.  A file that carries the count under another
+    # name (n_pairs in the ploidy schema) is still read; a naive per-cell TSV has no
+    # donor count at all (n_clusters is empty in it), so its n cells render as '--',
+    # which is what the caption - it describes donors - promises.
+    n_col = next((c for c in ('n_clusters', 'n_pairs', 'n_cells_paired')
+                  if c in tab.columns), None)
+    value_cols = ['pvalue_holm', 'rank_biserial_r', 'ci95_r_low', 'ci95_r_high']
+    missing = [c for c in ('scenario', 'metric', 'caller_b') + (n_col,) + tuple(value_cols)
+               if c is not None and c not in tab.columns]
+    if missing:
+        logging.error('column(s) %s missing from %s (available: %s)',
+                      missing, tsv_path, ', '.join(map(str, tab.columns)))
+        logging.error('rerun the statistical tests with the current stat_tests.py '
+                      'to obtain n, p, r and the 95%% CI of r')
+        return None
+    if n_col is None:
+        n_col = 'n_cells_paired'
+        tab[n_col] = float('nan')
     sub = tab.loc[tab['scenario'].isin(('Hap_0', 'Hap_1'))].copy()
     if sub.empty:
         logging.error('no rows with scenario in {Hap_0, Hap_1} in %s', tsv_path)
@@ -159,14 +216,31 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
     # into the caption); with --stats-all-pairs it is needed to identify pairs.
     ref_callers = list(dict.fromkeys(sub['caller_a'].tolist())) if 'caller_a' in sub.columns else []
     show_caller_a = len(ref_callers) > 1
-    # ---- pivot: one row per (metric, [caller_a,] caller_b), cols = scenario ----
+    # ---- pivot: one row per (metric, [caller_a,] caller_b); per scenario a
+    # group of the four statistics (n, p, r, CI-of-r) in this exact order ----
     index_cols = ['metric', 'caller_a', 'caller_b'] if show_caller_a else ['metric', 'caller_b']
-    piv = sub.pivot_table(index=index_cols, columns='scenario',
-                          values='pvalue_holm', aggfunc='first')
+    stat_keys = [('n', n_col), ('p', 'pvalue_holm'), ('r', 'rank_biserial_r'),
+                 ('lo', 'ci95_r_low'), ('hi', 'ci95_r_high')]
+    # The row set is the set of comparisons that actually occur in the file.  It must
+    # NOT be anchored on a single statistic: pivot_table(dropna=True) drops every row
+    # for which that statistic is missing in all scenarios, so anchoring on n printed
+    # an EMPTY table when the file has no n_clusters / n_pairs / n_cells_paired, and
+    # relaxing dropna instead invents the full caller_a x caller_b cross product for
+    # --stats-all-pairs.  A statistic that is missing for one comparison is rendered
+    # as '--' in its own cell only.
+    piv = sub[index_cols].drop_duplicates().set_index(index_cols)
+    for tag, key in stat_keys:
+        p = sub.pivot_table(index=index_cols, columns='scenario',
+                            values=key, aggfunc='first')
+        p.columns = [F'{sc}_{tag}' for sc in p.columns]
+        piv = piv.join(p)
     for sc in ('Hap_0', 'Hap_1'):
-        if sc not in piv.columns:
-            piv[sc] = float('nan')
-    piv = piv[['Hap_0', 'Hap_1']].reset_index()
+        for tag, _key in stat_keys:
+            col = F'{sc}_{tag}'
+            if col not in piv.columns:
+                piv[col] = float('nan')
+    piv = piv[[F'{sc}_{tag}' for sc in ('Hap_0', 'Hap_1')
+               for tag, _key in stat_keys]].reset_index()
     piv['metric'] = pd.Categorical(piv['metric'], categories=metric_order, ordered=True)
     piv['caller_b'] = pd.Categorical(piv['caller_b'], categories=caller_order, ordered=True)
     if show_caller_a:
@@ -177,14 +251,21 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
         piv = piv.sort_values(['metric', 'caller_b'])
     ref_desc = _format_reference(reference)
     legend = _perf_legend(ref_desc, ref_is_constant_column=not show_caller_a)
-    if show_caller_a:
-        header = ('Metric & Caller $a$ & Caller $b$ '
-                  '& Hap\\_0 Holm $p$ & Hap\\_1 Holm $p$ \\\\')
-        colspec = 'llrrr'
-    else:
-        header = ('Metric & Caller $b$ '
-                  '& Hap\\_0 Holm $p$ & Hap\\_1 Holm $p$ \\\\')
-        colspec = 'llrr'
+    # ---- header: two scenario groups, each with the four statistics -------
+    stat_header = '$n$ & $p$ & $r$ & 95\\% CI'
+    n_id = 1 + (1 if show_caller_a else 0) + 1        # last identity column
+    sc1_first, sc1_last = n_id + 1, n_id + 4
+    sc2_first, sc2_last = n_id + 5, n_id + 8
+    identity_cells = ('Metric & Caller $a$ & Caller $b$' if show_caller_a
+                      else 'Metric & Caller $b$')
+    header = [
+        F'    {identity_cells} '
+        F'& \\multicolumn{{4}}{{c}}{{Hap\\_0}} & \\multicolumn{{4}}{{c}}{{Hap\\_1}} \\\\',
+        F'    \\cmidrule(lr){{{sc1_first}-{sc1_last}}}\\cmidrule(lr){{{sc2_first}-{sc2_last}}}',
+        F'     & {" " if show_caller_a else ""} & {" " if show_caller_a else ""}'
+        F'{stat_header} & {stat_header} \\\\',
+    ]
+    colspec = ('lll' if show_caller_a else 'll') + 'rrrr' * 2
     lines = [
         F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
         '(requires \\usepackage{booktabs})',
@@ -194,24 +275,32 @@ def _latex_table_lines(tsv_path, reference='ginkgo', legend_kind='perf',
         F'  \\label{{{table_label}}}',
         F'  \\begin{{tabular}}{{{colspec}}}',
         '    \\toprule',
-        F'    {header}',
+        *header,
         '    \\midrule',
     ]
     for rec in piv.itertuples(index=False):
-        p_hap0 = _fmt_pvalue_holm(rec.Hap_0, alpha=alpha)
-        p_hap1 = _fmt_pvalue_holm(rec.Hap_1, alpha=alpha)
         # the cell type a metric applies to is part of its display name (e.g.
         # 'PCC_intCN (aneuploid cells)'), matching the figure labels
         metric_label = F'{rec.metric} ({metric_cell_type_label(rec.metric)})'
+        n0 = _fmt_signed_int(getattr(rec, 'Hap_0_n'))
+        p0 = _fmt_pvalue_holm(getattr(rec, 'Hap_0_p'), alpha=alpha)
+        r0 = _fmt_effect(getattr(rec, 'Hap_0_r'))
+        ci0 = _fmt_ci(getattr(rec, 'Hap_0_lo'), getattr(rec, 'Hap_0_hi'))
+        n1 = _fmt_signed_int(getattr(rec, 'Hap_1_n'))
+        p1 = _fmt_pvalue_holm(getattr(rec, 'Hap_1_p'), alpha=alpha)
+        r1 = _fmt_effect(getattr(rec, 'Hap_1_r'))
+        ci1 = _fmt_ci(getattr(rec, 'Hap_1_lo'), getattr(rec, 'Hap_1_hi'))
         if show_caller_a:
             lines.append(F'    {_tex_escape(metric_label)} '
                          F'& {_tex_escape(caller_display_name_tex(rec.caller_a))} '
                          F'& {_tex_escape(caller_display_name_tex(rec.caller_b))} '
-                         F'& {p_hap0} & {p_hap1} \\\\')
+                         F'& {n0} & {p0} & {r0} & {ci0} '
+                         F'& {n1} & {p1} & {r1} & {ci1} \\\\')
         else:
             lines.append(F'    {_tex_escape(metric_label)} '
                          F'& {_tex_escape(caller_display_name_tex(rec.caller_b))} '
-                         F'& {p_hap0} & {p_hap1} \\\\')
+                         F'& {n0} & {p0} & {r0} & {ci0} '
+                         F'& {n1} & {p1} & {r1} & {ci1} \\\\')
     lines += [
         '    \\bottomrule',
         '  \\end{tabular}',
@@ -315,19 +404,12 @@ parser1.add_argument('--no-latex-table', dest='latex_table_auto',
 parser1.add_argument('--latex-table', action='store_true', default=False,
                     help='Print the booktabs LaTeX table built from the existing '
                          '<output>.stats.pairwise.tsv (rows with scenario in '
-                         '{Hap_0, Hap_1}; pivoted to one row per (metric, caller_b) '
-                         'with two Holm-adjusted $p$ columns, Hap_0 and Hap_1) '
+                         '{Hap_0, Hap_1}; one row per (metric, caller_b), each '
+                         'scenario carrying the four statistics n, p, r and the '
+                         '95%% CI of r) '
                          'to stdout and exit, before reading stdin.')
 
 args = parser1.parse_args()
-
-if args.latex_table:
-    sys.exit(emit_latex_stats_table(
-        args.output + '.stats.pairwise.tsv',
-        reference=args.stats_reference,
-        legend_kind='perf',
-        table_label='tab:scwgs-perf-pairwise',
-        alpha=args.stats_alpha))
 
 # Column (caller) metadata: the manuscript name, the publication year shown under the
 # name, and the exact publication date used to sort the columns (journal issue date
@@ -535,6 +617,20 @@ def restrict_metrics_to_cell_types(df):
         for col in [c for c in df.columns if c.endswith('.' + metric)]:
             df.loc[mask, col] = np.nan
     return df
+
+
+# [FIX] --latex-table is handled HERE, not next to the argparse block above: the
+# table needs metric_cell_type_label() (and the METRIC_* tables it reads), which are
+# defined in the metric section above, i.e. after the argparse block.  Handling the
+# flag at the argparse block raised NameError as soon as the table had a row.  This
+# is still before stdin is read, so the flag never consumes the long TSV.
+if args.latex_table:
+    sys.exit(emit_latex_stats_table(
+        args.output + '.stats.pairwise.tsv',
+        reference=args.stats_reference,
+        legend_kind='perf',
+        table_label='tab:scwgs-perf-pairwise',
+        alpha=args.stats_alpha))
 
 
 if (args.type & 0x1):

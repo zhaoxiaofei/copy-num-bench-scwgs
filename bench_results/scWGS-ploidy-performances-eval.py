@@ -2085,6 +2085,8 @@ def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
     [FIX] The previous caption described the per-scenario stratification of the
     CNV-caller benchmark (Hap_0 vs Hap_1), which the pooled ploidy table does
     not have; it now describes the actual pooled design.
+    [REV v4] Describes exactly the four reported statistics (n, p, r, 95% CI
+    of r), matching the table columns.
     """
     ref_clause = (F'({ref_desc})'
                   if not show_ref_col else
@@ -2098,12 +2100,14 @@ def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
         'across all panels in which it occurs, preferring non-failed rows -- so each '
         'donor is one independent sample (the same germline donors underlie the three '
         'emulated cell-line panels). The metric is the percentage of cells whose ploidy '
-        'estimate is within $\\pm$0.5 of the ground truth. $p$ values are two-sided '
-        'Wilcoxon signed-rank tests on the paired per-donor differences, '
-        'Holm--Bonferroni-adjusted within the single pooled family; bold values are '
-        'significant at the 0.05 family-wise level. Median diff.\\ (pp) is the '
-        'reference minus method $b$ in percentage points (positive favours the '
-        'reference); $n$ is the number of donors paired for that comparison.'
+        'estimate is within $\\pm$0.5 of the ground truth. Each row reports, in this '
+        'order: $n$, the effective sample size (number of donors paired for that '
+        'comparison); $p$, the two-sided Wilcoxon signed-rank test on the paired '
+        'per-donor differences, Holm--Bonferroni-adjusted within the single pooled '
+        'family, bold at the 0.05 family-wise level; $r$, the matched-pairs '
+        'rank-biserial correlation on the per-donor differences (positive means the '
+        'reference outperforms method $b$); and the 95\\% percentile-bootstrap CI of '
+        '$r$ obtained by resampling the donors.'
     )
 
 
@@ -2152,6 +2156,23 @@ def _fmt_signed_float(x, decimals=1):
     return F'{x:.{decimals}f}'
 
 
+def _fmt_effect(x, decimals=2):
+    """Format a rank-biserial effect-size cell; missing values become '--'."""
+    return _fmt_signed_float(x, decimals=decimals)
+
+
+def _fmt_ci(low, high, decimals=2):
+    """Format a 95% confidence-interval cell as '[low, high]'; missing -> '--'."""
+    try:
+        lo, hi = float(low), float(high)
+    except (TypeError, ValueError):
+        return '--'
+    if lo != lo or hi != hi or lo in (float('inf'), float('-inf')) \
+            or hi in (float('inf'), float('-inf')):
+        return '--'
+    return F'[{lo:.{decimals}f}, {hi:.{decimals}f}]'
+
+
 def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
                         table_label='tab:pairwise', alpha=0.05,
                         caption_note=None):
@@ -2159,10 +2180,16 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
 
     [FIX] Reads the PLOIDY schema written by stat_tests.run_ploidy_benchmark_stats:
     required columns are (method_b, pvalue_holm); the optional columns
-    (plot, method_a, n_pairs, median_diff_a_minus_b) are shown whenever they add
-    information -- the Panel column only when more than one panel occurs (the
-    pooled file has the constant 'POOLED'), and the Method $a$ column only when
-    several reference methods occur (e.g. a hand-made all-pairs table).
+    (plot, method_a, n_pairs) are shown whenever they add information -- the
+    Panel column only when more than one panel occurs (the pooled file has the
+    constant 'POOLED'), and the Method $a$ column only when several reference
+    methods occur (e.g. a hand-made all-pairs table).
+    [REV v4] After the identity columns, every row carries exactly these four
+    statistics, in this order and nothing else: the effective sample size n
+    (number of donors), the Holm-adjusted two-sided p, the effect size r
+    (matched-pairs rank-biserial correlation) and the 95% bootstrap CI of r.
+    The previous 'Median diff. (pp)' column (a statistic outside this set) is
+    gone: it remains available in the pairwise TSV for exploration.
     Returns the list of table lines, or None on any problem (a reason is logged).
     """
     import pandas as pd
@@ -2171,11 +2198,15 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
         logging.error('run the script with the statistical tests enabled (default) to generate it first')
         return None
     tab = pd.read_csv(tsv_path, sep='\t')
-    for col in ('method_b', 'pvalue_holm'):
-        if col not in tab.columns:
-            logging.error('column %r missing from %s (available: %s)',
-                          col, tsv_path, ', '.join(map(str, tab.columns)))
-            return None
+    n_col = next((c for c in ('n_pairs', 'n_clusters') if c in tab.columns), None)
+    missing = [c for c in ('method_b', 'pvalue_holm', 'rank_biserial_r',
+                           'ci95_r_low', 'ci95_r_high') if c not in tab.columns]
+    if missing:
+        logging.error('column(s) %s missing from %s (available: %s)',
+                      missing, tsv_path, ', '.join(map(str, tab.columns)))
+        logging.error('rerun the pooled statistical tests with the current '
+                      'stat_tests.py to obtain n, p, r and the 95%% CI of r')
+        return None
     sub = tab.dropna(subset=['method_b']).copy()
     if sub.empty:
         logging.error('no pairwise rows in %s', tsv_path)
@@ -2188,9 +2219,17 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
 
     show_panel = ('plot' in sub.columns and sub['plot'].astype(str).nunique() > 1)
     show_ref = ('method_a' in sub.columns and sub['method_a'].astype(str).nunique() > 1)
-    show_n = 'n_pairs' in sub.columns
-    show_diff = 'median_diff_a_minus_b' in sub.columns
+    if n_col is None:
+        # [FIX] keep the documented four-statistic schema (n, p, r, 95% CI of r)
+        # even when the file has no n column at all: the cell then renders as '--'.
+        # The previous code created this column but dropped it from the header and
+        # every row (show_n was computed before the fallback), so the table silently
+        # lost the sample size the caption promises.
+        sub['n_effective'] = float('nan')
+        n_col = 'n_effective'
+    show_n = True
 
+    # ---- header: identity columns + exactly (n, p, r, 95% CI) ----
     header_cells = []
     if show_panel:
         header_cells.append('Panel')
@@ -2198,11 +2237,11 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
         header_cells.append('Method $a$')
     header_cells.append('Method $b$')
     if show_n:
-        header_cells.append('Paired $n$')
-    if show_diff:
-        header_cells.append('Median diff.\\ (pp)')
-    header_cells.append('Holm-adjusted $p$')
-    colspec = ('l' * sum([show_panel, show_ref, 1]) + 'r' * sum([show_n, show_diff, 1]))
+        header_cells.append('$n$')
+    header_cells += ['$p$', '$r$', '95\\% CI']
+    n_id = (1 if show_panel else 0) + (1 if show_ref else 0) + 1   # identity columns
+    # identity columns incl. the n column are left/integer-style, p/r/CI numeric
+    colspec = 'l' * (n_id + (1 if show_n else 0)) + 'r' * 3
 
     legend = _ploidy_legend(_format_reference(reference),
                             show_panel_col=show_panel, show_ref_col=show_ref)
@@ -2228,10 +2267,10 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
             cells.append(_tex_escape(rec.method_a))
         cells.append(_tex_escape(rec.method_b))
         if show_n:
-            cells.append(_fmt_signed_float(rec.n_pairs, 0))
-        if show_diff:
-            cells.append(_fmt_signed_float(rec.median_diff_a_minus_b, 1))
+            cells.append(_fmt_signed_float(getattr(rec, n_col), 0))
         cells.append(_fmt_pvalue_holm(rec.pvalue_holm, alpha=alpha))
+        cells.append(_fmt_effect(rec.rank_biserial_r))
+        cells.append(_fmt_ci(rec.ci95_r_low, rec.ci95_r_high))
         lines.append(F'    {" & ".join(cells)} \\\\')
     lines += [
         '    \\bottomrule',

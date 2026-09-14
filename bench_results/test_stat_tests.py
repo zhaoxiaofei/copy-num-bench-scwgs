@@ -106,7 +106,8 @@ pw = pd.read_csv(os.path.join(OUT, 'fig2stats.stats.pairwise.tsv'), sep='\t')
 fr = pd.read_csv(os.path.join(OUT, 'fig2stats.stats.friedman.tsv'), sep='\t')
 need_cols = ['inference_level', 'cluster_key', 'n_clusters', 'n_cells_paired',
              'pvalue_two_sided', 'pvalue_sign_test', 'pvalue_holm',
-             'rank_biserial_r', 'cl_effect_paired', 'ci95_median_diff_low',
+             'rank_biserial_r', 'ci95_r_low', 'ci95_r_high',
+             'cl_effect_paired', 'ci95_median_diff_low',
              'ci95_median_diff_high', 'pvalue_cell_naive',
              'rank_biserial_r_cell_naive', 'icc_within_cluster_d',
              'design_effect', 'n_effective_cells', 'p_inflation_ratio']
@@ -134,6 +135,13 @@ with open(os.path.join(OUT, 'fig2stats.stats.json')) as fh:
     js = json.load(fh)
 assert js['independence']['cluster_key'] == ['donor']
 assert js['independence']['n_clusters'] == 9
+# 95% CI of the effect size r: plausible bounds and it brackets the estimate
+assert pw['ci95_r_low'].between(-1.01, 1.01).all() and pw['ci95_r_high'].between(-1.01, 1.01).all()
+assert (pw['ci95_r_low'] <= pw['ci95_r_high']).all()
+_brackets = ((pw['ci95_r_low'] <= pw['rank_biserial_r'])
+             & (pw['rank_biserial_r'] <= pw['ci95_r_high']))
+assert _brackets.mean() >= 0.9, F'bootstrap CI of r brackets the estimate only in {_brackets.mean() * 100:.0f}% of rows'
+print(F'OK fig2stats: 95% CI of r present ({_brackets.mean() * 100:.0f}% of rows bracketed)')
 print(F'OK fig2stats: {len(pw)} pairwise rows, icc median '
       F'{pw["icc_within_cluster_d"].median():.3f}, design effect median '
       F'{pw["design_effect"].median():.2f}, n_eff median '
@@ -224,6 +232,8 @@ if ret.returncode != 0:
 
 pw3 = pd.read_csv(os.path.join(OUT, 'fig3stats.stats.pairwise.tsv'), sep='\t')
 fr3 = pd.read_csv(os.path.join(OUT, 'fig3stats.stats.friedman.tsv'), sep='\t')
+assert pw3['ci95_r_low'].notna().any() and pw3['ci95_r_high'].notna().any()
+assert (pw3['ci95_r_low'] <= pw3['ci95_r_high']).all()
 with open(os.path.join(OUT, 'fig3stats.stats.json')) as fh:
     js3 = json.load(fh)
 per_group = js3['independence']['per_plot_group']
@@ -247,6 +257,135 @@ for f in ['fig2stats.stats.pairwise.tsv', 'fig2stats.stats.friedman.tsv',
     p = os.path.join(OUT, f)
     assert os.path.isfile(p), F'MISSING {p}'
     print(F'OK {f}: {os.path.getsize(p)} bytes')
+
+# ------------------------------------------------------------------ Part D --
+# LaTeX table regression: the booktabs tables written by the two evaluation
+# scripts must carry, per comparison, EXACTLY the four statistics
+# (n, p, r, 95% CI of r) in this order - nothing more, nothing less.
+import shutil
+
+# D.1 - CNV-caller table (scWGS-performances-eval.py --stats-only on the
+#       synthetic long TSV of Part A; the table is auto-written as .tex)
+EVAL = os.path.join(HERE, 'scWGS-performances-eval.py')
+tex1 = os.path.join(OUT, 'fig2tex.stats.pairwise.tex')
+with open(long_tsv) as fh:
+    ret = subprocess.run([sys.executable, EVAL, '-t', '1',
+                          '-o', os.path.join(OUT, 'fig2tex'), '--stats-only',
+                          '--stats-boot', '300'],
+                         stdin=fh, capture_output=True, text=True, cwd=HERE)
+assert ret.returncode == 0, ret.stderr[-2000:]
+assert os.path.isfile(tex1), F'MISSING {tex1}'
+text = open(tex1).read()
+assert text.count(r'\multicolumn{4}{c}{Hap\_0}') == 1
+assert text.count(r'\multicolumn{4}{c}{Hap\_1}') == 1
+assert text.count(r'$n$ & $p$ & $r$ & 95\% CI') == 2
+assert r'\cmidrule(lr){3-6}' in text and r'\cmidrule(lr){7-10}' in text
+assert 'Holm $p$' not in text and 'Median diff' not in text
+body = [ln for ln in text.splitlines()
+        if ln.startswith('    ') and ln.rstrip().endswith('\\')
+        and 'multicolumn' not in ln and '$n$ & $p$' not in ln
+        and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
+assert body and all(ln.count('&') == 9 for ln in body), \
+    'caller table rows must have exactly 10 cells (metric, caller_b, 8 statistics)'
+import re as _re
+assert len(_re.findall(r'\[-?\d+\.\d{2}, -?\d+\.\d{2}\]', text)) >= 2 * len(body) - 4
+print(F'OK Part D.1: caller LaTeX table = n, p, r, CI per scenario ({len(body)} rows)')
+
+# D.2 - pooled ploidy table (stat_tests.py ploidy mode -> synthetic pooled
+#       donor table -> scWGS-ploidy-performances-eval.py --latex-table)
+methods_p = ['aneufinder|10', 'chisel|10', 'ginkgo|10', 'hmmcopy|10', 'scabsolute|inf']
+effect_p = {'ginkgo|10': 8.0, 'aneufinder|10': 2.0, 'chisel|10': -3.0,
+            'hmmcopy|10': -5.0, 'scabsolute|inf': 0.5}
+rows_p = []
+for d in [F'donor{i}' for i in range(12)]:
+    shock = rng.normal(0, 4.0)
+    for m in methods_p:
+        rows_p.append({'plot': 'POOLED', 'dataset': F'{d}_ds', 'tool': m.split('|')[0],
+                       'max_cn': m.split('|')[1], 'method': m, 'window': 0.5,
+                       'n_cells': 300, 'n_cells_finite': 280,
+                       'pct_within': float(np.clip(60 + shock + effect_p[m]
+                                                   + rng.normal(0, 5), 0, 100)),
+                       'failed': False, 'donor': d})
+pooled_in = os.path.join(OUT, 'synthetic_pooled_long.tsv')
+pd.DataFrame(rows_p).to_csv(pooled_in, sep='\t', index=False)
+ret = subprocess.run([sys.executable, STAT, '-i', pooled_in,
+                      '-o', os.path.join(OUT, 'fig3pooled'),
+                      '--reference', 'ginkgo|10', '--cluster-key', 'none',
+                      '--boot', '500'], capture_output=True, text=True)
+assert ret.returncode == 0, ret.stderr[-2000:]
+pooled_tsv = os.path.join(OUT, 'fig3pooled.stats.pairwise.tsv')
+assert os.path.isfile(pooled_tsv)
+EVAL_P = os.path.join(HERE, 'scWGS-ploidy-performances-eval.py')
+ploidy_out = os.path.join(OUT, 'fig3pooledtex')
+os.makedirs(OUT, exist_ok=True)
+shutil.copyfile(pooled_tsv, ploidy_out + '.pooled.stats.pairwise.tsv')
+ret = subprocess.run([sys.executable, EVAL_P, '-o', ploidy_out, '--latex-table'],
+                     capture_output=True, text=True, cwd=HERE)
+assert ret.returncode == 0, ret.stderr[-2000:]
+text_p = ret.stdout
+assert '$n$ & $p$ & $r$ & 95\\% CI' in text_p
+assert 'Median diff' not in text_p and 'Paired $n$' not in text_p
+body_p = [ln for ln in text_p.splitlines()
+          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          and '$n$ & $p$' not in ln and 'toprule' not in ln
+          and 'midrule' not in ln and 'bottomrule' not in ln]
+assert body_p and all(ln.count('&') == 4 for ln in body_p), \
+    'ploidy table rows must have exactly 5 cells (method_b, n, p, r, CI)'
+print(F'OK Part D.2: pooled ploidy LaTeX table = n, p, r, CI ({len(body_p)} rows)')
+
+# D.3 - --latex-table CLI (the printed table must equal the auto-written .tex;
+#       this path crashed with NameError because the metric-cell-type helper is
+#       defined after the argparse block, i.e. after the flag used to be handled)
+ret = subprocess.run([sys.executable, EVAL, '-o', os.path.join(OUT, 'fig2tex'),
+                      '--latex-table'], capture_output=True, text=True, cwd=HERE)
+assert ret.returncode == 0, ret.stderr[-2000:]
+assert ret.stdout.rstrip('\n') == open(tex1).read().rstrip('\n'), \
+    '--latex-table output differs from the auto-written table'
+print('OK Part D.3: --latex-table reproduces the auto-written caller table')
+
+# D.4 - a pairwise TSV without ANY n column (hand-made or older file) must still
+#       list every comparison, with '--' in the n cells: the table used to come out
+#       completely empty because the row set was anchored on the all-missing n stat
+src = pd.read_csv(os.path.join(OUT, 'fig2tex.stats.pairwise.tsv'), sep='\t')
+n_cols = [c for c in ('n_clusters', 'n_pairs', 'n_cells_paired') if c in src.columns]
+assert n_cols, 'the stats TSV must carry an n column'
+src.drop(columns=n_cols).to_csv(
+    os.path.join(OUT, 'fig2non.stats.pairwise.tsv'), sep='\t', index=False)
+ret = subprocess.run([sys.executable, EVAL, '-o', os.path.join(OUT, 'fig2non'),
+                      '--latex-table'], capture_output=True, text=True, cwd=HERE)
+assert ret.returncode == 0, ret.stderr[-2000:]
+body_n = [ln for ln in ret.stdout.splitlines()
+          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          and 'multicolumn' not in ln and '$n$ & $p$' not in ln
+          and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
+assert len(body_n) == len(body), \
+    F'without an n column the table lost rows ({len(body_n)} vs {len(body)})'
+assert all(ln.split('&')[2].strip() == '--' and ln.split('&')[6].strip() == '--'
+           for ln in body_n), 'missing n must be rendered as --'
+print(F'OK Part D.4: TSV without an n column keeps all {len(body_n)} rows, n = --')
+
+# D.5 - the pooled ploidy table must keep its n column even when the file has no
+#       n_pairs/n_clusters to read it from (it was silently dropped from the header,
+#       the colspec and every row)
+pooled_src = pd.read_csv(pooled_tsv, sep='\t')
+pooled_n_cols = [c for c in ('n_pairs', 'n_clusters') if c in pooled_src.columns]
+assert pooled_n_cols, 'the pooled ploidy TSV must carry an n column'
+noleg_out = os.path.join(OUT, 'fig3poolednoleg')
+pooled_src.drop(columns=pooled_n_cols).to_csv(
+    noleg_out + '.pooled.stats.pairwise.tsv', sep='\t', index=False)
+ret = subprocess.run([sys.executable, EVAL_P, '-o', noleg_out, '--latex-table'],
+                     capture_output=True, text=True, cwd=HERE)
+assert ret.returncode == 0, ret.stderr[-2000:]
+assert '$n$ & $p$ & $r$ & 95\\% CI' in ret.stdout, \
+    'the ploidy table must keep the n column when the file has no n column'
+body_np = [ln for ln in ret.stdout.splitlines()
+           if ln.startswith('    ') and ln.rstrip().endswith('\\')
+           and '$n$ & $p$' not in ln and 'toprule' not in ln
+           and 'midrule' not in ln and 'bottomrule' not in ln]
+assert body_np and all(ln.count('&') == 4 for ln in body_np)
+assert all(ln.split('&')[1].strip() == '--' for ln in body_np)
+print(F'OK Part D.5: pooled ploidy table keeps n = -- without an n column '
+      F'({len(body_np)} rows)')
 
 # ------------------------------------------------------------------ Part C --
 def demo_independence_failure(n_reps=300, n_clusters=45, n_total=1989,

@@ -145,7 +145,13 @@ booktabs LaTeX tables written by `bench_results/scWGS-performances-eval.py` and
 `bench_results/scWGS-ploidy-performances-eval.py`
 (`${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex` and
 `${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`), which `cnb-g-9-supp-FigsAndTables-k.tex` uses
-for Supplementary Tables S2 and S3.
+for Supplementary Tables S2 and S3, plus the scRNA-seq caller pairwise table
+`${SCRNA}/heatmaps/stats.pairwise.tex` whenever the companion scRNA-seq repository
+provides it: that file is owned by that repository (which does not produce it yet, so the
+copy is normally a no-op that only warns - see the note on a missing table below).  Each
+comparison in the two scWGS tables reports, in this order and nothing else: the effective
+sample size $n$ (donors), the multiplicity-adjusted $p$, the effect size $r$ and the 95% CI
+of $r$; the scRNA-seq table is expected to follow the same four-statistic schema.
 
 ```
 # Run from the repository root; the paths below follow the layout of the sections above:
@@ -239,6 +245,11 @@ cp "${SCRNA}/heatmaps/swarm_grid_metric_by_method.pdf"     "${DEST}/Fig5_scRNA_s
 # pairwise booktabs LaTeX tables used by the SI (Supplementary Tables S2-S3)
 cp "${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex" "${DEST}/"
 cp "${PLOIDY_PREFIX}.pooled.stats.pairwise.tex" "${DEST}/"
+# scRNA-seq caller pairwise table (n, p, r, 95% CI of r), when the companion
+# repository provides it; the file is absent while that repository does not write it
+if [ -f "${SCRNA}/heatmaps/stats.pairwise.tex" ]; then
+    cp "${SCRNA}/heatmaps/stats.pairwise.tex" "${DEST}/"
+fi
 ```
 
 Notes:
@@ -279,8 +290,13 @@ suffix appended (the directory is created if missing):
 The copy step also places the pairwise booktabs LaTeX tables used by
 `cnb-g-9-supp-FigsAndTables-k.tex` into `${DEST}`:
 `${PREFIX}.plots.stats.pairwise.tex` and
-`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`.  A versioned directory therefore contains the
-display items together with the LaTeX source of Supplementary Tables S2 and S3.
+`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`, plus the scRNA-seq caller table
+`${SCRNA}/heatmaps/stats.pairwise.tex` when the companion repository has produced it (a
+missing table only warns, so the copy step never fails; that repository does not write the
+file yet).  A versioned directory therefore contains the display items together with the
+LaTeX source of Supplementary Tables S2 and S3.  Each row of the two scWGS tables carries
+exactly four statistics, in this order: the effective sample size $n$, the adjusted $p$, the
+effect size $r$ and the 95% CI of $r$.
 
 Both code repositories' commit ids, `-clean`/`-dirty` state, commit messages and full
 uncommitted diffs are printed once at the very start and once at the very end of the run
@@ -410,8 +426,10 @@ statistics and flagged naive comparisons:
   percentage of cells within the window by dataset, within each plot group (COLO-829 /
   HCC1395 / HeLa / ACT), aggregated to the chosen cluster level.
 * **Effect sizes:** donor/cluster-level matched-pairs rank-biserial correlation r (positive =
-  reference better), paired common-language effect size P(ref > other) + 0.5 P(tie) on the
-  cell population, and the median per-cell difference with a **cluster bootstrap 95% CI**
+  reference better) with a **95% percentile-bootstrap CI** obtained by resampling the
+  independent units (`ci95_r_low`/`ci95_r_high`), the paired common-language effect size
+  P(ref > other) + 0.5 P(tie) on the cell population, and the median per-cell difference
+  with a **cluster bootstrap 95% CI**
   (donors/clusters resampled with replacement, all cells of a drawn donor kept together;
   10,000 resamples requested by default, capped at 5,000 for runtime; seeded, so all
   intervals are exactly reproducible).
@@ -435,7 +453,8 @@ statistics and flagged naive comparisons:
 
 Exact two-sided P values, effect sizes and confidence intervals are reported in full in
 `*.stats.pairwise.tsv` (columns `pvalue_two_sided`, `pvalue_sign_test`, `pvalue_holm`,
-`rank_biserial_r`, `cl_effect_paired`, `ci95_median_diff_low/high`, `icc_within_cluster_d`,
+`rank_biserial_r`, `ci95_r_low/high`, `cl_effect_paired`, `ci95_median_diff_low/high`,
+`icc_within_cluster_d`,
 `design_effect`, `n_effective_cells`, `p_inflation_ratio`); `n_pairs` is the number of units
 the primary test runs on (donors by default in Fig. 2; `n_cells_paired`/`n_clusters` give the
 cell and donor/cluster counts).  Asymptotic P values that underflow double precision
@@ -444,8 +463,11 @@ Wilcoxon to reach P < 0.05 (< 6 donors).  The exact n for every analysis, the ch
 key, the donor count and size distribution, and the full independence record are written to
 `*.stats.json`, together with the test settings, the bootstrap seed and the software
 versions.  After every Fig. 2 stats run the script also writes `<output>.stats.pairwise.tex`,
-a booktabs LaTeX table with one row per (metric, caller $b$) and two Holm-adjusted P columns
--- **Hap_0** and **Hap_1** -- so the manuscript table always shows the donor-level values.
+a booktabs LaTeX table with one row per (metric, caller $b$); each of the two ground-truth
+scenario groups (**Hap_0**, **Hap_1**) owns four sub-columns that carry, in this order and
+nothing else, the effective sample size $n$ (donors), the Holm-adjusted $p$, the effect size
+$r$ and the 95% bootstrap CI of $r$ -- so the manuscript table always shows the donor-level
+values.
 
 Options: `--no-stats` disables the tests; `--stats-reference`, `--stats-boot`,
 `--stats-seed`, `--stats-alpha` tune them; `--stats-pair-key` overrides the columns that

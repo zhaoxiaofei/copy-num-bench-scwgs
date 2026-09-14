@@ -19,10 +19,11 @@ nonparametric tests are used throughout, and all comparisons are two-sided
     (scenario, metric) family of comparisons. All pairwise comparisons are
     available with --all-pairs.
 3.  Effect sizes per comparison: matched-pairs rank-biserial correlation r
-    (positive = reference performs better), paired common-language effect
+    (positive = reference performs better) with a 95% percentile-bootstrap
+    confidence interval obtained by resampling the independent units (seeded,
+    hence fully reproducible), the paired common-language effect
     size P(ref > other) + 0.5*P(ref == other), and the median performance
-    difference with a 95% confidence interval (seeded, hence fully
-    reproducible).
+    difference with a 95% confidence interval.
 4.  Hap_0 vs. Hap_1 agreement (the CNP/aneuploidy-fix check): Spearman's rho
     between the per-caller median-performance rankings under the two
     ground-truth scenarios, plus a two-sided Wilcoxon signed-rank test of the
@@ -134,10 +135,12 @@ Outputs (prefix = -o/--output)
                                n_clusters / n_cells_paired, medians, median
                                difference, W, two-sided P (donor/cluster level
                                by default), sign-test P, Holm-adjusted P,
-                               rank-biserial r, CL effect size, 95% CI,
-                               naive per-cell P + rank-biserial, ICC, design
-                               effect, effective n, P-inflation ratio, notes
-<-prefix>.stats.friedman.tsv    omnibus Friedman chi2, df, P, Kendall's W,
+                               rank-biserial r + its 95% bootstrap CI
+                               (ci95_r_low/high), CL effect size, 95% CI of
+                               the median difference, naive per-cell P +
+                               rank-biserial, ICC, design effect, effective
+                               n, P-inflation ratio, notes
+<prefix>.stats.friedman.tsv    omnibus Friedman chi2, df, P, Kendall's W,
                                per-caller mean ranks; rows at both levels:
                                'cluster' (primary) and 'cell (naive)'
 <prefix>.stats.concordance.tsv (caller benchmark) Hap_0 vs Hap_1 agreement
@@ -402,6 +405,38 @@ def cluster_bootstrap_median_ci(d, cluster_ids, statistic=np.median,
     return float(lo), float(hi), 'cluster-percentile'
 
 
+def bootstrap_r_ci(units, n_resamples=2000, confidence_level=0.95, seed=1):
+    """Percentile-bootstrap CI of the matched-pairs rank-biserial effect size r.
+
+    `units` are the i.i.d. paired differences AT THE INFERENCE LEVEL: the
+    per-cluster (donor) medians in cluster mode, or the raw per-cell
+    differences in naive mode. The independent units are resampled with
+    replacement, r is recomputed on every resample, and the percentile
+    interval of the r distribution is returned. This targets the same estimand
+    as the reported rank_biserial_r, so (r, CI) describe ONE effect size.
+    Degenerate samples fall back to the point estimate with an explanatory
+    method string. Returns (low, high, method).
+    """
+    u = np.asarray(units, dtype=float)
+    u = u[np.isfinite(u)]
+    if len(u) == 0:
+        return float('nan'), float('nan'), 'no data'
+    point = rank_biserial_matched(u)
+    if len(u) < 2:
+        return point, point, 'single unit: CI undefined'
+    if np.all(u == u[0]):
+        return point, point, 'degenerate sample (all differences equal)'
+    rng = np.random.default_rng(seed)
+    b = int(n_resamples)
+    rs = np.empty(b, dtype=float)
+    for i in range(b):
+        pick = rng.integers(0, len(u), len(u))
+        rs[i] = rank_biserial_matched(u[pick])
+    a = 1.0 - float(confidence_level)
+    lo, hi = np.quantile(rs, [a / 2.0, 1.0 - a / 2.0])
+    return float(lo), float(hi), 'unit-percentile'
+
+
 def icc_design_effect(d, cluster_ids):
     """ICC(1,1) of clustered observations + design effect + effective n.
 
@@ -617,6 +652,8 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
         n_boot = int(min(n_resamples, MAX_CLUSTER_BOOTSTRAP))
         ci_lo, ci_hi, ci_method = cluster_bootstrap_median_ci(
             d, labels, np.median, n_resamples=max(n_boot, 200), seed=seed)
+        r_lo, r_hi, r_ci_method = bootstrap_r_ci(
+            cm_v, n_resamples=max(n_boot, 200), seed=seed)
         icc = icc_design_effect(d, labels)
         rec.update({
             'n_pairs': int(len(cm_v)),            # units the primary test runs on
@@ -625,6 +662,7 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
             'pvalue_two_sided': w_cl['pvalue'],
             'pvalue_sign_test': st['pvalue'],
             'rank_biserial_r': rank_biserial_matched(cm_v),
+            'ci95_r_low': r_lo, 'ci95_r_high': r_hi, 'ci_r_method': r_ci_method,
             'ci95_median_diff_low': ci_lo, 'ci95_median_diff_high': ci_hi,
             'ci_method': ci_method,
             'icc_within_cluster_d': icc['icc'],
@@ -652,6 +690,8 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
         st = sign_test_two_sided(d)
         ci_lo, ci_hi, ci_method = bca_bootstrap_ci(
             d, np.median, n_resamples=n_resamples, seed=seed)
+        r_lo, r_hi, r_ci_method = bootstrap_r_ci(
+            d, n_resamples=min(n_resamples, MAX_CLUSTER_BOOTSTRAP), seed=seed)
         rec.update({
             'n_pairs': w_cell['n_pairs'],
             'n_clusters': float('nan'),
@@ -659,6 +699,7 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
             'pvalue_two_sided': w_cell['pvalue'],
             'pvalue_sign_test': st['pvalue'],
             'rank_biserial_r': rank_biserial_matched(d),
+            'ci95_r_low': r_lo, 'ci95_r_high': r_hi, 'ci_r_method': r_ci_method,
             'ci95_median_diff_low': ci_lo, 'ci95_median_diff_high': ci_hi,
             'ci_method': ci_method,
             'icc_within_cluster_d': float('nan'),
@@ -804,7 +845,8 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                         'family on the cluster-level (donor-level by default) P values '
                         '(scenario-difference rows: '
                         'Holm within each (metric) family across callers)',
-        'effect_sizes': ['matched-pairs rank-biserial r (cluster/donor level)',
+        'effect_sizes': ['matched-pairs rank-biserial r (cluster/donor level) with '
+                         'a 95% percentile-bootstrap CI over the independent units',
                          'paired common-language effect size (cell population)',
                          'median per-cell difference with cluster-bootstrap 95% CI'],
         'tail': 'two-sided (two-tailed) for all tests',
@@ -1072,7 +1114,8 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
                         "('cluster' rows) and per-dataset level ('dataset (naive)' rows)",
         'posthoc_test': 'two-sided Wilcoxon signed-rank + exact sign test on per-cluster '
                         'medians, paired by dataset; Holm-Bonferroni within each plot group',
-        'effect_sizes': ['matched-pairs rank-biserial r (cluster level)',
+        'effect_sizes': ['matched-pairs rank-biserial r (cluster level) with a '
+                         '95% percentile-bootstrap CI over the independent units',
                          'paired common-language effect size (dataset population)',
                          'median per-dataset difference (percentage points) with '
                          'cluster-bootstrap 95% CI'],
