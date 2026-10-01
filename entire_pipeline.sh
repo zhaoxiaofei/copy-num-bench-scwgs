@@ -22,8 +22,24 @@
 #   SI Table source      ${STATS_TEX}, ${PLOIDY_STATS_TEX} (the booktabs LaTeX tables
 #                        used by cnb-g-9-supp-FigsAndTables-k.tex) and
 #                        ${SCRNA}/heatmaps/stats.pairwise.tex (the scRNA-seq
-#                        caller pairwise table: n, p, r, 95% CI of r, when the
-#                        companion repository has produced it)
+#                        caller pairwise table: n, p, r, 95% CI of r) plus
+#                        ${SCRNA}/heatmaps/winner.stepdown.tex (the scRNA-seq
+#                        ordering / unique-winner / top-2 step-down table,
+#                        same four statistics per row)
+#   MCB tables           ${PREFIX}.plots.stats.mcb.tex (Hsu's comparison with the
+#                        best per (scenario, metric) for Fig. 2),
+#                        ${PLOIDY_PREFIX}.pooled.stats.mcb.tex (Fig. 3, pooled
+#                        + per-balloon-panel sections) and
+#                        ${SCRNA}/heatmaps/mcb.tex (Fig. 5, per metric) - each
+#                        row carries exactly n, p, r and the simultaneous 95%
+#                        MCB interval of the gap to the best
+#   Source data          ${DEST}/source_data/ - the data necessary and sufficient
+#                        to re-plot Figs. 2-5 (per-cell Fig. 2 table, Fig. 3
+#                        balloon table, per-caller HG008 heatmap matrices for
+#                        Fig. 4, the Fig. 5 swarm table), each with a manifest
+#                        (MANIFEST.txt) and JSON sidecars; written by the same
+#                        scripts that draw the figures, so numbers can never
+#                        drift apart
 #   Provenance           ${GIT_SNAPSHOT_TXT} (copied into ${DEST} at the very end)
 #   Fig. 1               not code-generated (hand-drawn scheme)
 #
@@ -47,12 +63,11 @@
 # the montage.  RECOMPILE_SI=1 (default 0) recompiles the SI LaTeX in ${MANUSCRIPT}.
 # The booktabs LaTeX tables written by the two evaluation scripts (${STATS_TEX} and
 # ${PLOIDY_STATS_TEX}, used by cnb-g-9-supp-FigsAndTables-k.tex) are copied into ${DEST}
-# with the other display items, together with the scRNA-seq caller pairwise table
-# (${SCRNA}/heatmaps/stats.pairwise.tex, expected to carry the same four statistics
-# per comparison: n, p, r and the 95% CI of r).  That file belongs to the companion
-# scRNA-seq repository; when it is absent - the companion repository does not
-# produce it yet, and it is also absent whenever the scRNA figures step was skipped -
-# the copy only warns, so the pipeline never fails on it.
+# with the other display items, together with the two scRNA-seq statistical tables
+# written by plot_cnv_heatmaps.py via the companion repository's stat_tests.py and
+# winner_analysis.py (${SCRNA}/heatmaps/stats.pairwise.tex and
+# ${SCRNA}/heatmaps/winner.stepdown.tex; each of their rows carries exactly n, p, r
+# and the 95% CI of r).
 #
 # Both code repositories (${REPO} and ${SCRNA}) are reported with their commit id,
 # a -clean/-dirty suffix, the commit message and - when dirty - the full uncommitted
@@ -343,17 +358,122 @@ if [[ "${SKIP_COPY}" != 1 ]]; then
     # These are the tables used by cnb-g-9-supp-FigsAndTables-k.tex (Supplementary
     # Tables S2 and S3); keep a copy next to the figures/tables they describe.
     cp -v "${STATS_TEX}" "${PLOIDY_STATS_TEX}" "${DEST}/"
-    # --- scRNA-seq caller pairwise table (n, p, r, 95% CI of r) ---------------------
-    # Produced by the companion scRNA-seq repository (if at all); this repository
-    # only copies it.  A missing file only warns - it is absent whenever that
-    # repository does not write it (it does not today) or when the scRNA figures
-    # step was skipped (SKIP_FIG5=1) - so the copy step must not fail on it.
-    if [[ -f "${SCRNA}/heatmaps/stats.pairwise.tex" ]]; then
-        cp -v "${SCRNA}/heatmaps/stats.pairwise.tex" "${DEST}/"
-    else
-        printf 'note: %s not found (the scRNA-seq figures step was skipped or not yet run); table not copied\n' \
-               "${SCRNA}/heatmaps/stats.pairwise.tex" >&2
-    fi
+    # --- Hsu's MCB (comparison with the best) booktabs tables ---------------------
+    # Fig. 2 caller MCB, Fig. 3 pooled + per-panel ploidy MCB, Fig. 5 scRNA MCB:
+    # each row carries exactly n, p, r and the simultaneous 95% MCB interval of
+    # the gap to the best.  Existence-guarded: absent when the producing step
+    # was skipped (SKIP_FIG2/3/5=1) or run with --no-mcb.
+    for f in "${PREFIX}.plots.stats.mcb.tex" \
+             "${PLOIDY_PREFIX}.pooled.stats.mcb.tex" \
+             "${SCRNA}/heatmaps/mcb.tex" ; do
+        if [[ -f "${f}" ]]; then
+            cp -v "${f}" "${DEST}/"
+        else
+            printf 'note: %s not found (the step was skipped or run with --no-mcb); table not copied\n' \
+                   "${f}" >&2
+        fi
+    done
+    # --- scRNA-seq statistical tables (n, p, r, 95% CI of r) -----------------------
+    # stats.pairwise.tex   : reference-vs-rest pairwise table (stat_tests.py)
+    # winner.stepdown.tex  : ordering / unique-winner / top-2 step-down table
+    #                        (winner_analysis.py; needs no reference method)
+    # Both are written by plot_cnv_heatmaps.py (companion repository).  A missing
+    # file only warns: it is absent when the scRNA figures step was skipped
+    # (SKIP_FIG5=1), so the copy step must not fail on it.
+    for f in stats.pairwise.tex winner.stepdown.tex ; do
+        if [[ -f "${SCRNA}/heatmaps/${f}" ]]; then
+            cp -v "${SCRNA}/heatmaps/${f}" "${DEST}/"
+        else
+            printf 'note: %s not found (the scRNA-seq figures step was skipped or not yet run); table not copied\n' \
+                   "${SCRNA}/heatmaps/${f}" >&2
+        fi
+    done
+
+    # --- figure source data (production-ready submission) --------------------------
+    # The data necessary and sufficient to re-plot Figs. 2-5, written by the very
+    # scripts that draw the figures.  Every copy is existence-guarded so a
+    # skipped figure step only drops its own files, never fails the pipeline.
+    mkdir -p "${DEST}/source_data/Fig4_HG008"
+    cp_source() {
+        # cp_source <src> <dest-relative-name>: copy when present, else note.
+        local src="$1" dst="${DEST}/source_data/$2"
+        if [[ -f "${src}" ]]; then
+            cp -v "${src}" "${dst}"
+        else
+            printf 'note: source data %s not found (step skipped?); not copied\n' \
+                   "${src}" >&2
+        fi
+    }
+    # Fig. 2: per-cell table behind the box plots (+ meta sidecar, MCB TSV)
+    cp_source "${PREFIX}.plots.fig2_source_data.tsv"        "Fig2_scWGS_caller_grid.tsv"
+    cp_source "${PREFIX}.plots.fig2_source_data.meta.json"  "Fig2_scWGS_caller_grid.meta.json"
+    cp_source "${PREFIX}.plots.stats.mcb.tsv"               "Fig2_caller_mcb.tsv"
+    # Fig. 3: the balloon-plot table (one row per plot/dataset/tool/cap) and the
+    # pooled donor-level table + MCB families behind the ploidy tests
+    cp_source "${PLOIDY_PREFIX}_pct_within_long.tsv"        "Fig3_ploidy_balloons.tsv"
+    cp_source "${PLOIDY_PREFIX}.pooled.long.tsv"            "Fig3_ploidy_pooled_units.tsv"
+    cp_source "${PLOIDY_PREFIX}.pooled.stats.mcb.tsv"       "Fig3_ploidy_mcb_pooled.tsv"
+    cp_source "${PLOIDY_PREFIX}.stats.mcb_perpanel.tsv"     "Fig3_ploidy_mcb_perpanel.tsv"
+    # Fig. 4: per-caller HG008 heatmap matrices + display sidecars + cluster
+    # mappings (matrix in dendrogram leaf order; see each .heatmap_source_data.json)
+    for f in "${HG008_DIR}/${HG008_STEM}"*_clustermap.heatmap_source_data.tsv.gz \
+             "${HG008_DIR}/${HG008_STEM}"*_clustermap.heatmap_source_data.json \
+             "${HG008_DIR}/${HG008_STEM}"*_clustermap.cluster_membership.tsv \
+             "${HG008_DIR}/${HG008_STEM}"*_clustermap.cluster_order.tsv ; do
+        if [[ -e "${f}" ]]; then
+            cp -v "${f}" "${DEST}/source_data/Fig4_HG008/"
+        else
+            printf 'note: %s not found (heatmap step skipped?); not copied\n' "${f}" >&2
+        fi
+    done
+    # Fig. 5: the swarm-grid table (dataset x method x metric, purity/protocol)
+    # and the scRNA MCB families
+    cp_source "${SCRNA}/heatmaps/fig5_source_data.tsv"      "Fig5_scRNA_swarm_grid.tsv"
+    cp_source "${SCRNA}/heatmaps/fig5_source_data.meta.json" "Fig5_scRNA_swarm_grid.meta.json"
+    cp_source "${SCRNA}/heatmaps/mcb.tsv"                   "Fig5_scRNA_mcb.tsv"
+    # The manifest ties every file to its figure panel (Nat Biotech source-data
+    # files; regenerated every run so it never goes stale).
+    cat > "${DEST}/source_data/MANIFEST.txt" <<'MANIFEST'
+Source data of the code-generated display items (Figs. 2-5)
+============================================================
+Each file below contains the data necessary and sufficient to re-plot the
+corresponding figure with the deposited code; JSON sidecars carry the display
+names and parameters.  The files are written by the same scripts that draw the
+figures, so the source data and the figures can never drift apart.
+
+Fig2_scWGS_caller_grid.tsv        Fig. 2: one row per (ground-truth scenario,
+                                 metric, caller, simulated cell) with the
+                                 plotted performance value + donor identity;
+                                 re-plot: per-metric box plots (see the .meta.json
+                                 for the metric/caller display names).
+Fig2_caller_mcb.tsv               Hsu's MCB (comparison with the best) per
+                                 (scenario, metric, caller): n, p, r, 95% CI.
+Fig3_ploidy_balloons.tsv          Fig. 3: one row per (panel, dataset, tool,
+                                 cap): pct_within (balloon diameter),
+                                 n_cells_finite (balloon color), expected
+                                 ploidy, donor metadata.
+Fig3_ploidy_pooled_units.tsv      the donor-level pooled table behind the
+                                 ploidy statistical tests.
+Fig3_ploidy_mcb_pooled.tsv        Hsu's MCB, all panels pooled (one row per
+                                 method: n, p, r, 95% CI).
+Fig3_ploidy_mcb_perpanel.tsv      Hsu's MCB per balloon panel (a-d,
+                                 sensitivity analysis).
+Fig4_HG008/                       Fig. 4 + SI S23-S30: per-caller heatmap
+                                 source data - <caller>_clustermap matrices
+                                 (.heatmap_source_data.tsv.gz, rows = cells in
+                                 dendrogram leaf order, columns = genomic bins)
+                                 + .heatmap_source_data.json display sidecars +
+                                 cluster memberships / orders / linkages.
+                                 Fig. 4 is validated descriptively against the
+                                 HG008 cytogenetics (no inferential test, as
+                                 stated in the manuscript).
+Fig5_scRNA_swarm_grid.tsv         Fig. 5: one row per (dataset, method,
+                                 metric) with the plotted mean value + purity
+                                 bin and co-sequencing protocol.
+Fig5_scRNA_mcb.tsv                Hsu's MCB per (metric, method) across the
+                                 datasets' materials: n, p, r, 95% CI.
+MANIFEST
+    printf 'wrote %s/source_data/MANIFEST.txt\n' "${DEST}"
 else
     log "copy step skipped (SKIP_COPY=1)"
 fi

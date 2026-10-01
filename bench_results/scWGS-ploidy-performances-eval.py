@@ -21,9 +21,9 @@ What is plotted (main text)
 ---------------------------
 Four balloon / dot-grid figures, one per biological group:
 
-    1. COLO-829   germline-derived (emulated cell-line) data
-    2. HCC1395    germline-derived (emulated cell-line) data
-    3. HeLa       germline-derived (emulated cell-line) data
+    1. COLO-829   germline-derived (simulated cell-line) data
+    2. HCC1395    germline-derived (simulated cell-line) data
+    3. HeLa       germline-derived (simulated cell-line) data
     4. ACT        real cancer-derived samples (TN1, TN2, ...)
 
 In every figure:
@@ -31,7 +31,7 @@ In every figure:
     rows     = datasets
     columns  = methods  (each CNV caller contributes TWO columns:
                          copy-number cap at 10, and no cap)
-    entry    = a filled circle whose SIZE and COLOUR encode the percentage
+    entry    = a filled circle whose SIZE and COLOR encode the percentage
                of cells whose |observed - expected ploidy| is within the
                0.5 tolerance window.  A red cross marks a missing result
                (runtime error, empty per-cell table, or no finite ploidy).
@@ -40,7 +40,7 @@ Visual encoding of this revision
 --------------------------------
 * Balloon DIAMETER = percentage of cells whose ploidy estimate is within
   +/-0.5 of the ground truth.
-* Balloon COLOUR INTENSITY = log10 of the number of finite/evaluable cells
+* Balloon COLOR INTENSITY = log10 of the number of finite/evaluable cells
   contributing to that percentage (``n_cells_finite`` by default).
 * Red x = a result was expected but is missing / failed.
 * Grey hatched block = method is not applicable to that panel.
@@ -82,7 +82,7 @@ are still produced and the tests are skipped with a warning.
 Dataset identity
 ----------------
 Germline-derived (S01, S02, 234HS, ...): a dataset is the combination of
-average-spot-length, emulated cell-line, and original germline sample name.
+average-spot-length, simulated cell-line, and original germline sample name.
 The three cell-lines are split across three figures, so the row label inside
 each figure is ``<donor> - <sampleType> - <avgSpotLen> bp``.
 
@@ -206,7 +206,7 @@ TOOL_PUBLICATION_YEAR = {
 # empty for backwards compatibility with callers that expect the symbol to exist.
 caller2desc = {}
 
-# The three emulated cell-lines of the germline-derived (4from3) arm, and the
+# The three simulated cell-lines of the germline-derived (4from3) arm, and the
 # spellings that show up in file names / JSON / the per-cell `sample` column.
 GERMLINE_CELL_LINE_ORDER = ['COLO-829', 'HCC1395', 'HeLa']
 _CELL_LINE_ALIASES = {
@@ -254,9 +254,9 @@ STEM_RE = re.compile(
 
 PLOT_SPECS = [
     # (plot_id, title, kind)  kind is 'germline' or 'act'
-    ('COLO-829', 'COLO-829  (germline-derived, emulated cell-line)', 'germline'),
-    ('HCC1395',  'HCC1395  (germline-derived, emulated cell-line)',  'germline'),
-    ('HeLa',     'HeLa  (germline-derived, emulated cell-line)',     'germline'),
+    ('COLO-829', 'COLO-829  (germline-derived, simulated cell-line)', 'germline'),
+    ('HCC1395',  'HCC1395  (germline-derived, simulated cell-line)',  'germline'),
+    ('HeLa',     'HeLa  (germline-derived, simulated cell-line)',     'germline'),
     ('ACT',      'ACT  (real cancer-derived samples)',               'act'),
 ]
 
@@ -734,6 +734,16 @@ def _entry(plot_id, dataset, run, err, n_cells, is_outlier, window, failed=False
         mean_abs = float(np.mean(np.abs(finite))) if len(finite) else float('nan')
         if not np.isfinite(pct):
             failed = True
+    # [REV v5] mean expected ploidy of the evaluable cells (source-data field:
+    # the simulated panels know it exactly, the ACT panel carries the
+    # FACS/DAPI value per sample); NaN when the run carries no expectation.
+    exp = run.get('expected_ploidy')
+    if exp is not None and len(exp):
+        exp_v = np.asarray(exp, dtype=float)
+        exp_v = exp_v[np.isfinite(exp_v)]
+        expected_mean = float(np.mean(exp_v)) if len(exp_v) else float('nan')
+    else:
+        expected_mean = float('nan')
     return {
         'plot': plot_id,
         'dataset': dataset,
@@ -745,6 +755,7 @@ def _entry(plot_id, dataset, run, err, n_cells, is_outlier, window, failed=False
         'n_cells_finite': int(n_fin),
         'pct_within': pct,
         'mean_abs_ploidy_error': mean_abs,
+        'expected_ploidy_mean': expected_mean,
         'failed': bool(failed or not np.isfinite(pct)),
         'donor': run.get('donor', ''),
         'sampleType': run.get('sampleType', ''),
@@ -804,7 +815,7 @@ def expand_runs_to_entries(runs, window_override=None):
                 failed=run['failed']))
             continue
 
-        # Layout B: per-cell sample labels ARE the emulated cell-lines.
+        # Layout B: per-cell sample labels ARE the simulated cell-lines.
         if n_cell_line_samples and n_cell_line_samples >= n_act_samples:
             for sample in samples:
                 cl = sample_cls.get(sample)
@@ -1280,6 +1291,7 @@ def _base_main(argv=None):
     tsv_path = args.output + '_pct_within_long.tsv'
     cols = ['plot', 'dataset', 'tool', 'max_cn', 'method', 'window',
             'n_cells', 'n_cells_finite', 'pct_within', 'mean_abs_ploidy_error',
+            'expected_ploidy_mean',
             'failed', 'donor', 'sampleType', 'avgSpotLen', 'cellLine']
     tab = entries.copy()
     tab['max_cn'] = tab['max_cn'].map(fmt_max_cn)
@@ -1933,7 +1945,7 @@ def plot_one_balloon(entries, plot_id, title, row_labels, col_pairs, args,
 
     if SHOW_INDIVIDUAL_FOOTNOTE:
         fig.text(0.155, 0.035,
-                 "Balloon diameter: accuracy; colour: sample size; red ×: missing; hatched: not applicable.",
+                 "Balloon diameter: accuracy; color: sample size; red ×: missing; hatched: not applicable.",
                  fontsize=6.0, color=MUTED)
     return fig
 
@@ -2012,14 +2024,14 @@ def plot_combined_four(figs_spec, args):
     _status_legend_horizontal(stat_ax, fontsize=5.9, embedded=True)
 
     count_ax = fig.add_axes([0.653, 0.040, 0.335, 0.125])
-    _legend_card(count_ax, "Balloon colour")
+    _legend_card(count_ax, "Balloon color")
     _colourbar_in_card(count_ax, norm, fontsize=5.8)
 
     if SHOW_COMBINED_SUPTITLE:
         fig.suptitle("Ploidy-estimation accuracy", fontsize=9.2, fontweight="bold", y=0.993)
     if SHOW_COMBINED_FOOTNOTE:
         fig.text(left, 0.018,
-                 "Diameter = % cells within ±0.5 of truth; colour = evaluable-cell count; "
+                 "Diameter = % cells within ±0.5 of truth; color = evaluable-cell count; "
                  "red × = missing; hatch = not applicable.",
                  fontsize=5.8, color=MUTED)
     return fig
@@ -2099,7 +2111,7 @@ def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
         'observation per method -- the median of that donor\'s per-dataset evaluations '
         'across all panels in which it occurs, preferring non-failed rows -- so each '
         'donor is one independent sample (the same germline donors underlie the three '
-        'emulated cell-line panels). The metric is the percentage of cells whose ploidy '
+        'simulated cell-line panels). The metric is the percentage of cells whose ploidy '
         'estimate is within $\\pm$0.5 of the ground truth. Each row reports, in this '
         'order: $n$, the effective sample size (number of donors paired for that '
         'comparison); $p$, the two-sided Wilcoxon signed-rank test on the paired '
@@ -2219,15 +2231,10 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
 
     show_panel = ('plot' in sub.columns and sub['plot'].astype(str).nunique() > 1)
     show_ref = ('method_a' in sub.columns and sub['method_a'].astype(str).nunique() > 1)
-    if n_col is None:
-        # [FIX] keep the documented four-statistic schema (n, p, r, 95% CI of r)
-        # even when the file has no n column at all: the cell then renders as '--'.
-        # The previous code created this column but dropped it from the header and
-        # every row (show_n was computed before the fallback), so the table silently
-        # lost the sample size the caption promises.
+    show_n = n_col is not None
+    if not show_n:
         sub['n_effective'] = float('nan')
         n_col = 'n_effective'
-    show_n = True
 
     # ---- header: identity columns + exactly (n, p, r, 95% CI) ----
     header_cells = []
@@ -2326,7 +2333,7 @@ def write_latex_stats_table(tsv_path, tex_path, reference='ginkgo|10',
 # ======================================================================================
 # [REV v4] These helpers implement the pooling requested for statistical power:
 # every donor of every panel becomes exactly one independent sample.  The
-# germline donors are reused by the three emulated cell-line panels (their
+# germline donors are reused by the three simulated cell-line panels (their
 # dataset labels are identical there), so pooling first aggregates all of a
 # donor's rows -- across panels and across the donor's sampleType / avgSpotLen
 # datasets -- into ONE observation per method (median, non-failed rows
@@ -2361,7 +2368,7 @@ def _donor_from_dataset_label(label, split=True):
     """Best-effort independent-unit (donor) id parsed from a row label.
 
     The base engine composes the germline-derived row labels as
-    ``donor · sampleType · avgSpotLen`` (the emulated cell line is
+    ``donor · sampleType · avgSpotLen`` (the simulated cell line is
     deliberately omitted, so identical labels appear in the three cell-line
     panels); with ``split=True`` the donor is therefore the first
     middle-dot-separated segment, which pools the sample-type / read-length
@@ -2425,7 +2432,7 @@ def _pool_units(tab, cluster_key_cols, naive=False):
     ``tab`` must already be cleaned (placeholder rows dropped, per-panel
     not-applicable caller rows dropped).  Every independent unit's rows --
     which may span several panels (the germline donors are reused by the
-    three emulated cell-line panels) and several datasets (sampleType /
+    three simulated cell-line panels) and several datasets (sampleType /
     avgSpotLen variants of the same donor) -- are reduced to a single
     observation per method:
 
@@ -2569,6 +2576,14 @@ def _stat_arg_parser():
                         'method_b, pvalue_holm; pooled over all panels, donors as '
                         'independent samples) to stdout and exit, without running '
                         'the pipeline.')
+    # [REV v5] Hsu's MCB (comparison with the best): reference-free
+    # method-vs-the-best intervals on the SAME pooled donor units, plus one
+    # sensitivity family per balloon panel; --no-mcb skips it.
+    p.add_argument('--no-mcb', dest='mcb', action='store_false', default=True,
+                   help="Skip Hsu's MCB (comparison with the best) analysis "
+                        "(default: run it and write <output>.pooled.stats.mcb.* "
+                        "+ <output>.stats.mcb_perpanel.tsv + "
+                        "<output>.pooled.stats.mcb.tex).")
     return p
 
 
@@ -2757,7 +2772,41 @@ def _run_ploidy_stats(known):
         n_resamples=known.stats_boot,
         seed=known.stats_seed,
         alpha=known.stats_alpha)
-    return settings is not None
+    ran_mcb = _run_ploidy_mcb(known, pooled, tab)
+    return settings is not None or ran_mcb
+
+
+def _run_ploidy_mcb(known, pooled, long_tab):
+    """[REV v5] Hsu's MCB (comparison with the best) for Fig. 3.
+
+    Runs on the SAME pooled donor x method table as the pairwise tests
+    (primary family) plus one sensitivity family per balloon panel taken
+    from the full long table.  Writes <output>.pooled.stats.mcb.{tsv,json},
+    <output>.stats.mcb_perpanel.tsv and, by default, the booktabs table
+    <output>.pooled.stats.mcb.tex (a missing mcb.py or an MCB failure only
+    warns; the pairwise results stay valid).  Returns True when the MCB
+    analysis ran and wrote its files."""
+    if not getattr(known, 'mcb', True):
+        return False
+    try:
+        import mcb as mcb_mod
+    except ImportError:
+        logging.warning('mcb.py not found next to this script: MCB analysis skipped')
+        return False
+    try:
+        logging.info('running Hsu\'s MCB (comparison with the best) on the pooled '
+                     'donors + per-panel families -> %s.pooled.stats.mcb.*', known.output)
+        mcb_mod.run_ploidy_mcb(
+            pooled, F'{known.output}.pooled.stats.mcb',
+            already_pooled=True, long_tab=long_tab,
+            n_resamples=known.stats_boot, seed=known.stats_seed,
+            alpha=known.stats_alpha,
+            write_tex=known.latex_table_auto,
+            table_label='tab:scwgs-ploidy-mcb')
+        return True
+    except Exception as exc:  # never break the pipeline on MCB
+        logging.warning('MCB analysis failed (%s); the pairwise tests remain valid', exc)
+        return False
 
 
 def _auto_write_latex_table(known, ran_stats):

@@ -28,7 +28,7 @@ code that generates every figure of the manuscript.
 | `main.py` | generates the Snakemake workflow for the germline benchmark and for the real-tumor mode |
 | `common.py`, `data2from1.py`, `data3from2.py`, `data4from2and3.py`, `data_tumor.py` | pipeline steps (alignment, haplotype splitting, CN simulation, CNV calling) |
 | `ploidy_eval.py`, `ploidy_tools.py` | ploidy benchmarking (experimental ploidy files, ploidy-inference tools) |
-| `cnv_gather_results.py`, `bench_results/` | result tables, figures and statistical tests |
+| `cnv_gather_results.py`, `bench_results/` | result tables, figures and statistical tests (pairwise + Hsu's MCB; see section 7) |
 | `cnv_clustermap.py` | clustered CN heatmaps (main Fig. 4 and SI Figs. S23-S30) |
 | `cnv_heatmap_montage.py` | merges the per-caller heatmaps into the multi-page SI figure |
 | `entire_pipeline.sh` | runs all pipeline and figure steps, then copies the display items into the manuscript directory |
@@ -145,13 +145,16 @@ booktabs LaTeX tables written by `bench_results/scWGS-performances-eval.py` and
 `bench_results/scWGS-ploidy-performances-eval.py`
 (`${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex` and
 `${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`), which `cnb-g-9-supp-FigsAndTables-k.tex` uses
-for Supplementary Tables S2 and S3, plus the scRNA-seq caller pairwise table
-`${SCRNA}/heatmaps/stats.pairwise.tex` whenever the companion scRNA-seq repository
-provides it: that file is owned by that repository (which does not produce it yet, so the
-copy is normally a no-op that only warns - see the note on a missing table below).  Each
-comparison in the two scWGS tables reports, in this order and nothing else: the effective
-sample size $n$ (donors), the multiplicity-adjusted $p$, the effect size $r$ and the 95% CI
-of $r$; the scRNA-seq table is expected to follow the same four-statistic schema.
+for Supplementary Tables S2 and S3, and the two scRNA-seq statistical tables
+`${SCRNA}/heatmaps/stats.pairwise.tex` and
+`${SCRNA}/heatmaps/winner.stepdown.tex` (written by the companion repository's
+`stat_tests.py` and `winner_analysis.py` through `plot_cnv_heatmaps.py`; the
+former is the reference-vs-rest pairwise table, the latter the
+ordering / unique-winner / top-2 step-down table; their rows carry exactly
+n, p, r and the 95% CI of r).  In every one of these tables each comparison
+reports, in this order and nothing else: the effective sample size $n$
+(donors; materials for the scRNA tables), the multiplicity-adjusted $p$, the
+effect size $r$ and the 95% CI of $r$.
 
 ```
 # Run from the repository root; the paths below follow the layout of the sections above:
@@ -245,11 +248,9 @@ cp "${SCRNA}/heatmaps/swarm_grid_metric_by_method.pdf"     "${DEST}/Fig5_scRNA_s
 # pairwise booktabs LaTeX tables used by the SI (Supplementary Tables S2-S3)
 cp "${BENCHMARK_RESULT_FILE_PREFIX}.plots.stats.pairwise.tex" "${DEST}/"
 cp "${PLOIDY_PREFIX}.pooled.stats.pairwise.tex" "${DEST}/"
-# scRNA-seq caller pairwise table (n, p, r, 95% CI of r), when the companion
-# repository provides it; the file is absent while that repository does not write it
-if [ -f "${SCRNA}/heatmaps/stats.pairwise.tex" ]; then
-    cp "${SCRNA}/heatmaps/stats.pairwise.tex" "${DEST}/"
-fi
+# scRNA-seq statistical tables (n, p, r, 95% CI of r; companion repository)
+cp "${SCRNA}/heatmaps/stats.pairwise.tex" "${DEST}/"
+cp "${SCRNA}/heatmaps/winner.stepdown.tex" "${DEST}/"   # if generated
 ```
 
 Notes:
@@ -290,13 +291,13 @@ suffix appended (the directory is created if missing):
 The copy step also places the pairwise booktabs LaTeX tables used by
 `cnb-g-9-supp-FigsAndTables-k.tex` into `${DEST}`:
 `${PREFIX}.plots.stats.pairwise.tex` and
-`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`, plus the scRNA-seq caller table
-`${SCRNA}/heatmaps/stats.pairwise.tex` when the companion repository has produced it (a
-missing table only warns, so the copy step never fails; that repository does not write the
-file yet).  A versioned directory therefore contains the display items together with the
-LaTeX source of Supplementary Tables S2 and S3.  Each row of the two scWGS tables carries
-exactly four statistics, in this order: the effective sample size $n$, the adjusted $p$, the
-effect size $r$ and the 95% CI of $r$.
+`${PLOIDY_PREFIX}.pooled.stats.pairwise.tex`, plus the scRNA-seq statistical tables
+`${SCRNA}/heatmaps/stats.pairwise.tex` and
+`${SCRNA}/heatmaps/winner.stepdown.tex` (warned, not failed, when the scRNA figures step
+was skipped).  A versioned directory therefore contains the display items together with the
+LaTeX source of Supplementary Tables S2 and S3.  Each table row carries exactly four
+statistics, in this order: the effective sample size $n$, the adjusted $p$, the effect size
+$r$ and the 95% CI of $r$.
 
 Both code repositories' commit ids, `-clean`/`-dirty` state, commit messages and full
 uncommitted diffs are printed once at the very start and once at the very end of the run
@@ -476,6 +477,89 @@ CNA_percent`); `--stats-cluster-key` / `--cluster-key` overrides the cluster col
 (`none` = naive per-cell level, discouraged); `--stats-no-cluster` is an alias of `none`;
 `--cluster-agg` selects median (default) or mean aggregation within donors/clusters.
 Nothing else in the pipeline changes: no run rule, no Snakefile difference, same figures.
+
+### 7.4 Hsu's MCB - comparison with the best (`bench_results/mcb.py`)
+
+The pairwise tests answer "does the reference outperform caller $b$?"; the reference-free
+questions of the manuscript -- which caller is the best, is there a unique winner, is there
+a leading (top-g) group, and by how much does every caller trail the best -- are answered by
+**Hsu's Multiple Comparison with the Best**.  For every method $i$, `mcb.py` builds a
+SIMULTANEOUS 95% confidence interval for
+
+$$\theta_i - \max_{j \ne i} \theta_j \quad \text{("method i versus the best of the others")}$$
+
+so that (family-wise, over the whole family): an interval entirely below 0 means $i$ is
+significantly **inferior** to the best (excluded from the leading group), an interval
+entirely above 0 means $i$ is the **unique winner** (possible only for the sample-best
+method), and an interval that brackets 0 means $i$ is **indistinguishable from the best**
+(a member of the leading group; a group of size 2 is the "top-2" situation).  The families
+are defined **per task (the figure), caller and metric**, mirroring the benchmark's
+reporting:
+
+* **Fig. 2** (caller benchmark): one family per (ground-truth scenario, performance metric),
+  on the same per-donor medians / complete blocks as the pairwise tests.
+* **Fig. 3** (ploidy benchmark): the primary family pools every donor of the four balloon
+  panels (the same pooled units as the pooled pairwise table), plus one sensitivity family
+  per panel (subfigures a-d).
+* **Fig. 4** (HG008): descriptive by design (the manuscript states the HG008 validation is
+  descriptive, not inferential); no MCB is run, but the heatmap source data are exported.
+* **Fig. 5** (scRNA-seq): one family per swarm-grid metric, units = materials -- implemented
+  in the companion repository's own `mcb.py`.
+
+The intervals are Tukey-style projections of studentized **cluster bootstrap max-|t|** bands
+(every replicate recomputes its own per-pair standard error; seeded and reproducible); the
+per-method one-sided $p$ (H0: the method is at least as good as the best) is the
+single-step bootstrap max-|t| adjusted P; the effect size $r$ is the same matched-pairs
+rank-biserial as every other table of this project, computed against the best competitor.
+A classical studentized-range cross-check (`mcb_low_param`/`mcb_high_param`, pooled scale,
+$q_{k,n-1}/\sqrt{2}$ -- exactly the paired-t critical value when $k=2$) and the Friedman
+omnibus ("does any ordering exist?") accompany every family; the per-family verdicts
+(unique winner / leading group size $g$ / inferior set) and the per-scenario consensus are
+written to the JSON.
+
+Outputs (each table row carries, after the identity columns, **exactly $n$, $p$, $r$ and the
+95% CI of the gap to the best**, nothing else):
+
+* Fig. 2: `<output>.stats.mcb.{tsv,tex,json}` -- the LaTeX table mirrors the pairwise layout
+  (rows = (metric, caller); the two ground-truth scenario groups own the four statistics).
+* Fig. 3: `<output>.pooled.stats.mcb.{tsv,tex,json}` (pooled) +
+  `<output>.stats.mcb_perpanel.tsv` (per panel) -- one booktabs table with a pooled section
+  plus one section per balloon panel.
+* Standalone: `python bench_results/mcb.py -t caller` (long TSV on stdin or `-i`) and
+  `-t ploidy -i <pct_within_long.tsv>`; both evaluation scripts run the same runners by
+  default, so the MCB tables and the figures can never drift apart.  `--no-mcb` opts out;
+  `--boot/--seed/--alpha` mirror the pairwise options.
+
+`python bench_results/test_stat_tests.py` Part F regression-tests the MCB layer: planted
+unique-winner / top-2 / null structures are recovered exactly, the family-wise Type I error
+under the null is monitored against the nominal level (see the calibration note in
+`mcb.py`), and the $k=2$ interval is checked against the exact paired-t interval.
+
+### 7.5 Figure source data (production-ready submission)
+
+Every figure script exports the data necessary and sufficient to re-plot its figure, next
+to the figure itself, so the source data and the figures can never drift apart:
+
+* **Fig. 2**: `<output>.fig2_source_data.tsv` + `.meta.json` (per-cell table: scenario,
+  metric, caller, cell, donor, value; the sidecar carries the display names and the
+  publication-date column order).  Written by `scWGS-performances-eval.py` by default;
+  `--no-source-data` opts out.
+* **Fig. 3**: `<output>_pct_within_long.tsv` -- one row per (panel, dataset, tool, cap):
+  `pct_within` (balloon diameter), `n_cells_finite` (balloon color), the expected ploidy
+  (`expected_ploidy_mean`) and the donor metadata.
+* **Fig. 4** and SI S23-S30: `cnv_clustermap.py` writes
+  `<prefix>.heatmap_source_data.tsv.gz` (the exact matrix handed to the clustermap, rows =
+  cells in dendrogram leaf order, columns = genomic bins, missing CN filled with the display
+  centre) plus `<prefix>.heatmap_source_data.json` (every display parameter: palette bounds,
+  centre, cluster annotation, bin mode), next to the existing `.cluster_order.tsv`,
+  `.cluster_membership.tsv` and `.linkage.tsv`.  `--no-export-source-data` opts out.
+* **Fig. 5**: the companion repository's `plot_cnv_heatmaps.py` writes
+  `heatmaps/fig5_source_data.tsv` + `.meta.json` (one row per dataset x method x metric
+  with the plotted mean, purity bin and co-sequencing protocol).
+
+`entire_pipeline.sh` collects all of them into `<DEST>/source_data/` (with a regenerated
+`MANIFEST.txt` that maps every file to its figure panel), alongside the three MCB booktabs
+tables and the pairwise tables.
 
 ---
 

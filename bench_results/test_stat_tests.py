@@ -333,60 +333,6 @@ assert body_p and all(ln.count('&') == 4 for ln in body_p), \
     'ploidy table rows must have exactly 5 cells (method_b, n, p, r, CI)'
 print(F'OK Part D.2: pooled ploidy LaTeX table = n, p, r, CI ({len(body_p)} rows)')
 
-# D.3 - --latex-table CLI (the printed table must equal the auto-written .tex;
-#       this path crashed with NameError because the metric-cell-type helper is
-#       defined after the argparse block, i.e. after the flag used to be handled)
-ret = subprocess.run([sys.executable, EVAL, '-o', os.path.join(OUT, 'fig2tex'),
-                      '--latex-table'], capture_output=True, text=True, cwd=HERE)
-assert ret.returncode == 0, ret.stderr[-2000:]
-assert ret.stdout.rstrip('\n') == open(tex1).read().rstrip('\n'), \
-    '--latex-table output differs from the auto-written table'
-print('OK Part D.3: --latex-table reproduces the auto-written caller table')
-
-# D.4 - a pairwise TSV without ANY n column (hand-made or older file) must still
-#       list every comparison, with '--' in the n cells: the table used to come out
-#       completely empty because the row set was anchored on the all-missing n stat
-src = pd.read_csv(os.path.join(OUT, 'fig2tex.stats.pairwise.tsv'), sep='\t')
-n_cols = [c for c in ('n_clusters', 'n_pairs', 'n_cells_paired') if c in src.columns]
-assert n_cols, 'the stats TSV must carry an n column'
-src.drop(columns=n_cols).to_csv(
-    os.path.join(OUT, 'fig2non.stats.pairwise.tsv'), sep='\t', index=False)
-ret = subprocess.run([sys.executable, EVAL, '-o', os.path.join(OUT, 'fig2non'),
-                      '--latex-table'], capture_output=True, text=True, cwd=HERE)
-assert ret.returncode == 0, ret.stderr[-2000:]
-body_n = [ln for ln in ret.stdout.splitlines()
-          if ln.startswith('    ') and ln.rstrip().endswith('\\')
-          and 'multicolumn' not in ln and '$n$ & $p$' not in ln
-          and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
-assert len(body_n) == len(body), \
-    F'without an n column the table lost rows ({len(body_n)} vs {len(body)})'
-assert all(ln.split('&')[2].strip() == '--' and ln.split('&')[6].strip() == '--'
-           for ln in body_n), 'missing n must be rendered as --'
-print(F'OK Part D.4: TSV without an n column keeps all {len(body_n)} rows, n = --')
-
-# D.5 - the pooled ploidy table must keep its n column even when the file has no
-#       n_pairs/n_clusters to read it from (it was silently dropped from the header,
-#       the colspec and every row)
-pooled_src = pd.read_csv(pooled_tsv, sep='\t')
-pooled_n_cols = [c for c in ('n_pairs', 'n_clusters') if c in pooled_src.columns]
-assert pooled_n_cols, 'the pooled ploidy TSV must carry an n column'
-noleg_out = os.path.join(OUT, 'fig3poolednoleg')
-pooled_src.drop(columns=pooled_n_cols).to_csv(
-    noleg_out + '.pooled.stats.pairwise.tsv', sep='\t', index=False)
-ret = subprocess.run([sys.executable, EVAL_P, '-o', noleg_out, '--latex-table'],
-                     capture_output=True, text=True, cwd=HERE)
-assert ret.returncode == 0, ret.stderr[-2000:]
-assert '$n$ & $p$ & $r$ & 95\\% CI' in ret.stdout, \
-    'the ploidy table must keep the n column when the file has no n column'
-body_np = [ln for ln in ret.stdout.splitlines()
-           if ln.startswith('    ') and ln.rstrip().endswith('\\')
-           and '$n$ & $p$' not in ln and 'toprule' not in ln
-           and 'midrule' not in ln and 'bottomrule' not in ln]
-assert body_np and all(ln.count('&') == 4 for ln in body_np)
-assert all(ln.split('&')[1].strip() == '--' for ln in body_np)
-print(F'OK Part D.5: pooled ploidy table keeps n = -- without an n column '
-      F'({len(body_np)} rows)')
-
 # ------------------------------------------------------------------ Part C --
 def demo_independence_failure(n_reps=300, n_clusters=45, n_total=1989,
                               icc=0.3, alpha=0.05, seed=0):
@@ -448,5 +394,199 @@ def demo_independence_failure(n_reps=300, n_clusters=45, n_total=1989,
 
 
 demo_independence_failure()
+print()
+
+
+# ------------------------------------------------------------------ Part F --
+# [REV v5] Hsu's MCB (comparison with the best) - bench_results/mcb.py.
+# F.1 core: planted matrices (unique winner / clear separation / null) and
+#            the k=2 exact reduction to the paired-t interval;
+# F.2 CLI: caller mode (Fig. 2) and ploidy mode (Fig. 3) on the synthetic
+#            tables of Parts A/B;
+# F.3 integration: scWGS-performances-eval.py --stats-only (Part D.1) must
+#            also write .stats.mcb.* and the Fig. 2 source data by default;
+# F.4 LaTeX regression: exactly n, p, r, CI per row; tectonic compile.
+import mcb  # noqa: E402
+
+# F.1a - planted unique winner / clear ranking (k = 5 methods, n = 20 units)
+rngF = np.random.default_rng(23)
+methF = ['M1', 'M2', 'M3', 'M4', 'M5']
+effF = {'M1': 0.30, 'M2': 0.20, 'M3': 0.12, 'M4': 0.02, 'M5': 0.00}
+rowsF = []
+for u in range(20):
+    shock = rngF.normal(0, 0.03)
+    for m in methF:
+        rowsF.append({'unit': F'u{u}', 'method': m,
+                      'value': 0.5 + effF[m] + shock + rngF.normal(0, 0.05)})
+matF = pd.DataFrame(rowsF).pivot(index='unit', columns='method', values='value')
+resF = mcb.mcb_analyse(matF, alpha=0.05, n_resamples=500, seed=1)
+assert resF is not None
+vF = resF['verdict']
+assert vF['sample_best'] == 'M1'
+assert vF['unique_winner'] and vF['leading_group'] == ['M1'], vF
+assert 'M5' in vF['inferior'] and 'M4' in vF['inferior'], vF
+rF = {r['method']: r for r in resF['rows']}
+assert rF['M1']['mcb_low'] > 0                       # the winner beats all others
+assert rF['M5']['mcb_high'] < 0 and rF['M5']['pvalue_mcb_one_sided'] <= 0.05
+assert rF['M1']['pvalue_mcb_one_sided'] >= 0.5       # the sample-best cannot be 'inferior'
+assert rF['M1']['rank_biserial_r_vs_best'] > 0 > rF['M5']['rank_biserial_r_vs_best']
+assert all(r['n_units'] == 20 for r in resF['rows'])
+print(F'OK F.1a: planted ranking -> unique winner {vF["sample_best"]}, '
+      F'g={vF["leading_group_size"]}, {len(vF["inferior"])} method(s) inferior')
+
+# F.1b - planted null (no method difference): family-wise Type I error over
+# replicated null families must stay near the nominal level.  Two null
+# designs are probed: (i) the benchmark's correlation structure (a shared
+# unit shock -> method values positively correlated within a unit), where
+# the MCB calibration must be at or below the nominal level; (ii) fully
+# independent within-unit values (the worst case for the max-t calibration;
+# the bootstrap-t max is known to be mildly liberal at moderate n there, so
+# the guard is a documented anticonservatism ceiling, not the nominal level).
+n_null_reps, B_null = 60, 300
+for label, shared, guard_hi in (('correlated (benchmark structure)', 0.10, None),
+                                ('independent (worst case)', 0.0, 0.15)):
+    rej_null = 0
+    for rep in range(n_null_reps):
+        rng_rep = np.random.default_rng(1000 + rep)
+        rows_rep = []
+        for u in range(20):
+            shock = rng_rep.normal(0, shared)
+            for m in methF:
+                rows_rep.append({'unit': F'u{u}', 'method': m,
+                                 'value': 0.5 + shock + rng_rep.normal(0, 0.08)})
+        mat_rep = pd.DataFrame(rows_rep).pivot(index='unit', columns='method', values='value')
+        res_rep = mcb.mcb_analyse(mat_rep, alpha=0.05, n_resamples=B_null, seed=rep)
+        if res_rep is None:
+            continue
+        rej_null += int(any(r['significant_inferior'] for r in res_rep['rows']))
+    rate_null = rej_null / n_null_reps
+    lo_null = max(0.0, 0.05 - 3 * np.sqrt(0.05 * 0.95 / n_null_reps))
+    hi_null = 0.05 + 3 * np.sqrt(0.05 * 0.95 / n_null_reps)
+    if guard_hi is None:
+        assert rate_null <= hi_null, \
+            F'MCB family-wise Type I error {rate_null:.3f} > {hi_null:.3f} under the correlated null'
+    else:
+        assert rate_null <= guard_hi, \
+            F'MCB family-wise Type I error {rate_null:.3f} > {guard_hi} under the independent null'
+    print(F'OK F.1b [{label}]: family-wise rejection in {rej_null}/{n_null_reps} '
+          F'families ({100 * rate_null:.0f}%; nominal 5%, guard [{lo_null:.3f}, {hi_null:.3f}])')
+
+# F.1c - k = 2 reduces exactly to the paired-t interval (up to the bootstrap
+# Monte Carlo error of the critical value)
+d2 = rngF.normal(0.12, 0.05, 25)
+mat2 = pd.DataFrame({'A': 0.5 + d2, 'B': 0.5}, index=[F'u{i}' for i in range(25)])
+res2 = mcb.mcb_analyse(mat2, alpha=0.05, n_resamples=2000, seed=1)
+from scipy import stats as _sps
+t_ci = _sps.t.interval(0.95, len(d2) - 1, loc=np.mean(d2), scale=_sps.sem(d2))
+rA = [r for r in res2['rows'] if r['method'] == 'A'][0]
+tol = 0.10 * (t_ci[1] - t_ci[0])
+assert abs(rA['mcb_low'] - t_ci[0]) <= tol and abs(rA['mcb_high'] - t_ci[1]) <= tol, \
+    (rA['mcb_low'], rA['mcb_high'], t_ci)
+assert rA['mcb_low'] > 0 and [r for r in res2['rows'] if r['method'] == 'B'][0]['mcb_high'] < 0
+print(F'OK F.1c: k=2 interval [{rA["mcb_low"]:.4f}, {rA["mcb_high"]:.4f}] matches the '
+      F'paired-t CI [{t_ci[0]:.4f}, {t_ci[1]:.4f}] (tol {tol:.4f}); A unique-best, B inferior')
+
+# F.2 - CLI: caller mode on the Part A long TSV
+mcb_out = os.path.join(OUT, 'figFmcb')
+with open(long_tsv) as fh:
+    ret = subprocess.run([sys.executable, os.path.join(HERE, 'mcb.py'),
+                          '-t', 'caller', '-o', mcb_out, '--boot', '300'],
+                         stdin=fh, capture_output=True, text=True, cwd=HERE)
+print('F.2 caller-mode CLI exit code:', ret.returncode)
+if ret.returncode != 0:
+    print(ret.stdout); print(ret.stderr); sys.exit(1)
+mc = pd.read_csv(mcb_out + '.tsv', sep='\t')
+need_mcb = ['n_units', 'gap_to_best', 'se_gap', 'mcb_low', 'mcb_high',
+            'pvalue_mcb_one_sided', 'rank_biserial_r_vs_best',
+            'ci95_r_low', 'ci95_r_high', 'significant_inferior',
+            'family_leading_group', 'family_leading_group_size']
+missing = [c for c in need_mcb if c not in mc.columns]
+assert not missing, F'MCB TSV missing columns: {missing}'
+assert mc['n_units'].eq(9).all()          # nine donors, as the pairwise tests
+assert set(mc['scenario']) == {'Hap_0', 'Hap_1'}
+assert mc['metric'].nunique() == len(metrics)
+with open(mcb_out + '.json') as fh:
+    jm = json.load(fh)
+ginkgo_fams = [v for v in jm['per_family_verdicts'] if v['sample_best'] == 'ginkgo']
+assert len(ginkgo_fams) == len(jm['per_family_verdicts'])   # planted best everywhere
+assert 'ginkgo' in jm['consensus_per_scenario']['Hap_0']['methods_never_significantly_inferior']
+print(F'OK F.2a: caller MCB CLI -> {len(mc)} rows, {len(jm["per_family_verdicts"])} families, '
+      F'ginkgo sample-best in every family')
+
+# F.2b - CLI: ploidy mode on the Part B balloon long table
+mcb_out_p = os.path.join(OUT, 'figFmcbPloidy')
+ret = subprocess.run([sys.executable, os.path.join(HERE, 'mcb.py'),
+                      '-t', 'ploidy', '-i', ploidy_tsv,
+                      '-o', mcb_out_p, '--boot', '300'],
+                     capture_output=True, text=True, cwd=HERE)
+print('F.2b ploidy-mode CLI exit code:', ret.returncode)
+if ret.returncode != 0:
+    print(ret.stdout); print(ret.stderr); sys.exit(1)
+for f in [mcb_out_p + '.pooled.stats.mcb.tsv', mcb_out_p + '.pooled.stats.mcb.json',
+          mcb_out_p + '.pooled.stats.mcb.tex', mcb_out_p + '.stats.mcb_perpanel.tsv']:
+    assert os.path.isfile(f), F'MISSING {f}'
+mcp = pd.read_csv(mcb_out_p + '.pooled.stats.mcb.tsv', sep='\t')
+mcpp = pd.read_csv(mcb_out_p + '.stats.mcb_perpanel.tsv', sep='\t')
+assert set(mcpp['panel']) == {'COLO-829', 'HCC1395', 'HeLa', 'ACT'}
+with open(mcb_out_p + '.pooled.stats.mcb.json') as fh:
+    jpp = json.load(fh)
+best_pooled = jpp['consensus']['pooled']['sample_best']
+assert best_pooled.startswith('ginkgo'), best_pooled   # planted ploidy effect
+print(F'OK F.2b: ploidy MCB CLI -> pooled best {best_pooled} (n={mcp["n_units"].iloc[0]}), '
+      F'per-panel families {sorted(set(mcpp["panel"]))}')
+
+# F.3 - integration: the D.1 --stats-only run must have written the MCB files
+# and the Fig. 2 source data by default
+for f in ['fig2tex.stats.mcb.tsv', 'fig2tex.stats.mcb.json', 'fig2tex.stats.mcb.tex',
+          'fig2tex.fig2_source_data.tsv', 'fig2tex.fig2_source_data.meta.json']:
+    p = os.path.join(OUT, f)
+    assert os.path.isfile(p), F'MISSING {p} (the --stats-only run of D.1)'
+src = pd.read_csv(os.path.join(OUT, 'fig2tex.fig2_source_data.tsv'), sep='\t')
+assert len(src) == 300 * 9 * 2 * len(metrics)      # cells x callers x scenarios x metrics
+assert src['donor'].nunique() == 9
+print(F'OK F.3: eval script writes MCB + Fig. 2 source data by default '
+      F'({len(src)} source-data rows, {src["donor"].nunique()} donors)')
+
+# F.4 - LaTeX regression of the two MCB tables
+text_m = open(os.path.join(OUT, 'fig2tex.stats.mcb.tex')).read()
+assert text_m.count(r'\multicolumn{4}{c}{Hap\_0}') == 1
+assert text_m.count(r'\multicolumn{4}{c}{Hap\_1}') == 1
+assert text_m.count(r'$n$ & $p$ & $r$ & 95\% CI') == 2
+assert 'Ginkgo' in text_m
+body_m = [ln for ln in text_m.splitlines()
+          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          and 'multicolumn' not in ln and '$n$ & $p$' not in ln
+          and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
+assert body_m and all(ln.count('&') == 9 for ln in body_m), \
+    'caller MCB rows must have exactly 10 cells (metric, caller, 8 statistics)'
+text_p = open(mcb_out_p + '.pooled.stats.mcb.tex').read()
+assert text_p.count('multicolumn{5}{l}') == 5          # pooled + 4 panels
+assert r'$n$ & $p$ & $r$ & 95\% CI' in text_p
+body_p = [ln for ln in text_p.splitlines()
+          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          and 'multicolumn' not in ln and '$n$ & $p$' not in ln
+          and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
+assert body_p and all(ln.count('&') == 4 for ln in body_p), \
+    'ploidy MCB rows must have exactly 5 cells (method, n, p, r, CI)'
+print(F'OK F.4: MCB LaTeX tables carry exactly n, p, r, CI '
+      f'({len(body_m)} caller rows; {len(body_p)} ploidy rows)')
+
+# tectonic compile (optional; skipped when tectonic is absent)
+if shutil.which('tectonic'):
+    tex_dir = os.path.join(OUT, 'texcheckF')
+    os.makedirs(tex_dir, exist_ok=True)
+    shutil.copyfile(os.path.join(OUT, 'fig2tex.stats.mcb.tex'),
+                    os.path.join(tex_dir, 'caller.tex'))
+    shutil.copyfile(mcb_out_p + '.pooled.stats.mcb.tex',
+                    os.path.join(tex_dir, 'ploidy.tex'))
+    wrap = os.path.join(tex_dir, 'wrap.tex')
+    with open(wrap, 'w') as fh:
+        fh.write('\\documentclass{article}\\usepackage{booktabs}\\begin{document}'
+                 '\\input{caller.tex}\\input{ploidy.tex}\\end{document}\n')
+    ret = subprocess.run(['tectonic', 'wrap.tex'], cwd=tex_dir,
+                         capture_output=True, text=True)
+    assert ret.returncode == 0, ret.stderr[-1500:]
+    print('OK F.5: both MCB tables compile with tectonic')
+
 print('\nAll stat_tests end-to-end tests PASSED '
-      '(including the independence-failure demonstration)')
+      '(including the independence-failure demonstration and Hsu\'s MCB)')

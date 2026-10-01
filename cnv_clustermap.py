@@ -29,6 +29,7 @@ bins, but it cannot remove the quadratic dependence on the number of cells.
 
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -771,6 +772,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep continuous CN values instead of rounding to integer copy numbers.",
     )
+    p.add_argument(
+        "--no-export-source-data",
+        dest="export_source_data",
+        action="store_false",
+        default=True,
+        help="Skip writing <output-prefix>.heatmap_source_data.tsv.gz (+ .json sidecar), "
+             "the matrix-and-parameters source data of this figure (default: write "
+             "them).",
+    )
+
     p.add_argument("--cmap", type=str, default="RdBu_r")
     p.add_argument("--vmin", type=float, default=0)
     p.add_argument("--vmax", type=float, default=6)
@@ -1208,6 +1219,62 @@ def main() -> None:
         )
 
     t4 = time.time()
+
+    # ------------------------------------------------------------------
+    # [REV v5] Fig. 4 / SI heatmap source data (production-ready submission).
+    # The exact matrix handed to sns.clustermap (missing CN filled with the
+    # display centre), rows in DENDROGRAM LEAF ORDER (the order the figure
+    # displays), columns in genomic order, plus a JSON sidecar with every
+    # display parameter a re-plot needs (palette bounds, centre, cluster
+    # annotation, by-chrom/bin mode).  Together with the already-written
+    # .cluster_order.tsv / .cluster_membership.tsv / .linkage.tsv this is the
+    # data necessary and sufficient to redraw the figure without re-running
+    # any caller.  Written by default; --no-export-source-data opts out.
+    # ------------------------------------------------------------------
+    if args.export_source_data:
+        try:
+            leaf_order = leaves_list(row_Z).astype(int)
+            src_mat = fill.iloc[leaf_order]
+            src_path = args.output_prefix + ".heatmap_source_data.tsv.gz"
+            src_mat.to_csv(src_path, sep="\t", index=True, index_label="cell",
+                           float_format="%.4g")
+            sidecar = {
+                "figure": "per-caller HG008 / tumor CNV heatmap (Fig. 4 and SI)",
+                "matrix_file": os.path.basename(src_path),
+                "rows": "cells, in dendrogram leaf order (the display order of the "
+                        "heatmap; same order as the companion .cluster_order.tsv)",
+                "columns": "genomic bins (fixed-size bins or chromosome means, in "
+                           "genomic order; chromosome_of_column parses the chr prefix)",
+                "values": f"copy numbers as plotted; missing CN filled with the "
+                          f"display centre {args.center}",
+                "display": {
+                    "tool": args.tool,
+                    "title": compose_title(args) or "",
+                    "by_chrom": bool(args.by_chrom),
+                    "bin_size": int(args.bin_size),
+                    "float_copy_numbers": bool(args.float_copy_numbers),
+                    "cmap": str(args.cmap),
+                    "vmin": float(args.vmin),
+                    "vmax": float(args.vmax),
+                    "center": float(args.center),
+                    "cluster_annotation": int(args.cluster_annotation),
+                    "linkage_method": str(args.linkage_method),
+                },
+                "n_cells": int(mat.shape[0]),
+                "n_bins": int(mat.shape[1]),
+                "companion_files": [
+                    os.path.basename(args.output_prefix) + ".cluster_order.tsv",
+                    os.path.basename(args.output_prefix) + ".cluster_membership.tsv",
+                    os.path.basename(args.output_prefix) + ".linkage.tsv",
+                ],
+                "generated_by": os.path.basename(sys.argv[0]),
+            }
+            with open(args.output_prefix + ".heatmap_source_data.json", "w") as fh:
+                json.dump(sidecar, fh, indent=2)
+            eprint(f"Source data written to {src_path} (+ .heatmap_source_data.json)")
+        except Exception as exc:  # never break the figure on a source-data failure
+            eprint(f"Warning: could not write the heatmap source data: {exc}")
+
     g = sns.clustermap(
         fill,
         row_cluster=True,

@@ -65,7 +65,7 @@ observations. For this benchmark that assumption is NOT credible:
 * Fig. 3: within a germline-derived plot group the "datasets" are
   (donor, sampleType, avgSpotLen) combinations - several datasets share one
   donor's biological material, and every dataset of a group shares the same
-  emulated cell-line template.
+  simulated cell-line template.
 
 WHAT HAPPENS IF THE ASSUMPTION FAILS (it does, to a measurable degree):
 classic pseudoreplication. The null variance of the Wilcoxon signed-rank /
@@ -1100,7 +1100,7 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
                        'i.e. per-dataset results of the SAME method treated as independent',
             'assumption_violation': 'within a germline-derived plot group, datasets with '
                        'the same donor share that donor haplotype material, and every '
-                       'dataset of the group shares the emulated cell-line template; '
+                       'dataset of the group shares the simulated cell-line template; '
                        'per-method results on shared-donor datasets are correlated',
             'cluster_selection': chain_source,
             'missing_donor_policy': "datasets without donor metadata collapse into one "
