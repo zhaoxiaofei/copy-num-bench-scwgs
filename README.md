@@ -495,7 +495,12 @@ a booktabs LaTeX table with one row per (metric, caller $b$); each of the two gr
 scenario groups (**Hap_0**, **Hap_1**) owns four sub-columns that carry, in this order and
 nothing else, the effective sample size $n$ (donors), the Holm-adjusted $p$, the effect size
 $r$ and the 95% bootstrap CI of $r$ -- so the manuscript table always shows the donor-level
-values.
+values.  The table is emitted as a `landscape` `longtable` with a `\captionof{table}`
+caption (`\scriptsize`, headers repeated on every page, `\addtocounter{table}{-1}` after
+the long table so the supplementary-table number is stepped once), and every CI header uses
+`\qty{95}{\percent}` (siunitx).  The pooled ploidy table is the compact float form: a
+`table`/`tabular` with the pretty method label, a **CN cap** column (`10` = CapAt10,
+`none` = uncapped) and the same four statistics.
 
 Options: `--no-stats` disables the tests; `--stats-reference`, `--stats-boot`,
 `--stats-seed`, `--stats-alpha` tune them; `--stats-pair-key` overrides the columns that

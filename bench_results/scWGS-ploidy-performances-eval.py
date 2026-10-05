@@ -2193,6 +2193,40 @@ def _format_reference(reference):
     return _CALLER_DISPLAY.get(ref, ref.capitalize())
 
 
+def _ploidy_cap_label(cap):
+    """Display label of a per-segment CN cap ('10' ...; 'none' = uncapped)."""
+    c = str(cap).strip()
+    if c.lower() in ('', 'inf', 'infinity', 'none', 'nan'):
+        return 'none'
+    return c
+
+
+def _ploidy_method_cells(method):
+    """(pretty method label, CN-cap label) of a 'tool|cap' method id."""
+    tool, _, cap = str(method).partition('|')
+    return pretty_tool(tool.strip()), _ploidy_cap_label(cap)
+
+
+def _ploidy_method_label(method):
+    """Pretty method label with the cap appended when the id carries one."""
+    label, cap = _ploidy_method_cells(method)
+    return F'{label} ({cap})' if '|' in str(method) else label
+
+
+def _ploidy_reference_desc(reference):
+    """Reference phrase of the pooled-ploidy caption, e.g. 'ginkgo|10' ->
+    'Ginkgo with per-segment CNs capped at 10'."""
+    ref = str(reference)
+    if '|' in ref:
+        tool, cap = ref.split('|', 1)
+        name = _CALLER_DISPLAY.get(tool.strip(), tool.strip().capitalize())
+        cap_label = _ploidy_cap_label(cap)
+        if cap_label == 'none':
+            return F'{name} with uncapped per-segment CNs'
+        return F'{name} with per-segment CNs capped at {cap_label}'
+    return _CALLER_DISPLAY.get(ref, ref.capitalize())
+
+
 def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
     """Table legend for the pooled ploidy-estimation pairwise table.
 
@@ -2207,24 +2241,32 @@ def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
                   F'($a$; see the Method $a$ column, {ref_desc} by default)')
     panel_clause = ('per panel, ' if show_panel_col else '')
     return (
-        'Pairwise comparison of ploidy-estimation accuracy between the reference method '
-        F'{ref_clause} and each other method ($b$), {panel_clause}pooled over all four '
-        'benchmark panels (COLO-829, HCC1395, HeLa, ACT). Every effective sample '
-        'contributes ONE observation per method -- the median of that sample\'s '
-        'per-dataset evaluations across all panels and sequencing runs in which it '
-        'occurs, preferring non-failed rows -- so each donor, tumour or cell line is '
-        'one independent sample (the same germline donors underlie the three simulated '
-        'cell-line panels), and repeated runs of one sample are merged: MDA-MB-231 '
-        '(MDAMB231c28, MDAMB231c8, MDAMB231_popp31) and the 36 bp / 152 bp runs of TN6 '
-        'and TN7 each contribute one sample. The metric is the percentage of cells '
-        'whose ploidy estimate is within $\\pm$0.5 of the ground truth. Each row '
-        'reports, in this order: $n$, the effective sample size (number of samples '
-        'paired for that comparison); $p$, the two-sided Wilcoxon signed-rank test on '
-        'the paired per-sample differences, Holm--Bonferroni-adjusted within the '
-        'single pooled family, bold at the 0.05 family-wise level; $r$, the '
-        'matched-pairs rank-biserial correlation on the per-sample differences '
-        '(positive means the reference outperforms method $b$); and the 95\\% '
-        'percentile-bootstrap CI of $r$ obtained by resampling the samples.'
+        'All panels pooled. Each germline donor or amplification-free acoustic cell '
+        'tagmentation (ACT) sample contributes one independent observation per method: '
+        'the median of that sample\'s per-dataset evaluations across all panels in '
+        'which it occurs, preferring non-failed rows. Pairwise comparisons of '
+        'ploidy-estimation accuracy are shown between the reference method '
+        F'{ref_clause} and each other method or capping setting ($b$). The comparison '
+        F'is {panel_clause}pooled over all four benchmark panels (COLO-829, HCC1395, '
+        'HeLa, and the ACT breast-cancer dataset). Method labels are the caller names '
+        'used throughout the manuscript. The copy-number (CN) cap column gives the '
+        'per-segment CN cap applied: 10 marks the CapAt10 setting defined in the main '
+        'text (per-segment CNs capped at 10), and none marks the NC setting (uncapped). '
+        'CN is the per-segment call; ACT is the benchmark cohort. The pooled set '
+        'comprises the nine germline donors (one summary per donor across the three '
+        'simulated cell-line panels) and the 12 ACT samples (14 derived samples, with '
+        'the three MDA-MB-231 preparations MDAMB231c28, MDAMB231c8 and '
+        'MDAMB231_popp31 merged into one), so $n$ varies by comparison according to '
+        'the availability of each method\'s output. The metric is the percentage of '
+        'cells whose ploidy estimate is within $\\pm$0.5 of the ground truth. Each row '
+        'reports, in this order, $n$, $p$, $r$, and the \\qty{95}{\\percent} CI. $n$ is '
+        'the effective sample size, that is, the number of samples paired for that '
+        'comparison. $p$ is the two-sided Wilcoxon signed-rank test on the paired '
+        'per-sample differences, Holm--Bonferroni-adjusted within the single pooled '
+        'family and bold at the 0.05 family-wise level. $r$ is the matched-pairs '
+        'rank-biserial correlation on the per-sample differences (positive means the '
+        'reference outperforms method $b$). The \\qty{95}{\\percent} percentile-bootstrap '
+        'CI of $r$ is obtained by resampling the samples.'
     )
 
 
@@ -2341,21 +2383,22 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
         sub['n_effective'] = float('nan')
         n_col = 'n_effective'
 
-    # ---- header: identity columns + exactly (n, p, r, 95% CI) ----
+    # ---- header: identity columns + CN cap + exactly (n, p, r, 95% CI) ----
     header_cells = []
     if show_panel:
         header_cells.append('Panel')
     if show_ref:
         header_cells.append('Method $a$')
     header_cells.append('Method $b$')
+    header_cells.append('CN cap')
     if show_n:
         header_cells.append('$n$')
-    header_cells += ['$p$', '$r$', '95\\% CI']
+    header_cells += ['$p$', '$r$', '\\qty{95}{\\percent} CI']
     n_id = (1 if show_panel else 0) + (1 if show_ref else 0) + 1   # identity columns
-    # identity columns incl. the n column are left/integer-style, p/r/CI numeric
-    colspec = 'l' * (n_id + (1 if show_n else 0)) + 'r' * 3
+    # identity columns, the CN-cap column and n are left/integer-style, p/r/CI numeric
+    colspec = 'l' * (n_id + 1 + (1 if show_n else 0)) + 'r' * 3
 
-    legend = _ploidy_legend(_format_reference(reference),
+    legend = _ploidy_legend(_ploidy_reference_desc(reference),
                             show_panel_col=show_panel, show_ref_col=show_ref)
     if caption_note:
         legend = F'{caption_note} {legend}'
@@ -2363,30 +2406,32 @@ def _ploidy_latex_lines(tsv_path, reference='ginkgo|10',
         F'% LaTeX table generated by {os.path.basename(sys.argv[0])} '
         '(requires \\usepackage{booktabs})',
         '\\begin{table}[htbp]',
-        '  \\centering',
-        F'  \\caption{{{legend}}}',
-        F'  \\label{{{table_label}}}',
-        F'  \\begin{{tabular}}{{{colspec}}}',
-        '    \\toprule',
-        F'    {" & ".join(header_cells)} \\\\',
-        '    \\midrule',
+        '\t\\centering',
+        F'\t\\caption{{{legend}}}',
+        F'\t\\label{{{table_label}}}',
+        F'\t\\begin{{tabular}}{{{colspec}}}',
+        '\t\t\\toprule',
+        F'\t\t{" & ".join(header_cells)} \\\\',
+        '\t\t\\midrule',
     ]
     for rec in sub.itertuples(index=False):
+        method_b, cap_b = _ploidy_method_cells(rec.method_b)
         cells = []
         if show_panel:
             cells.append(_tex_escape(rec.plot))
         if show_ref:
-            cells.append(_tex_escape(rec.method_a))
-        cells.append(_tex_escape(rec.method_b))
+            cells.append(_tex_escape(_ploidy_method_label(rec.method_a)))
+        cells.append(_tex_escape(method_b))
+        cells.append(_tex_escape(cap_b))
         if show_n:
             cells.append(_fmt_signed_float(getattr(rec, n_col), 0))
         cells.append(_fmt_pvalue_holm(rec.pvalue_holm, alpha=alpha))
         cells.append(_fmt_effect(rec.rank_biserial_r))
         cells.append(_fmt_ci(rec.ci95_r_low, rec.ci95_r_high))
-        lines.append(F'    {" & ".join(cells)} \\\\')
+        lines.append(F'\t\t{" & ".join(cells)} \\\\')
     lines += [
-        '    \\bottomrule',
-        '  \\end{tabular}',
+        '\t\t\\bottomrule',
+        '\t\\end{tabular}',
         '\\end{table}',
     ]
     return lines
@@ -3029,13 +3074,18 @@ def _run_ploidy_mcb(known, pooled, long_tab):
     try:
         logging.info('running Hsu\'s MCB (comparison with the best) on the pooled '
                      'donors + per-panel families -> %s.pooled.stats.mcb.*', known.output)
+        method_display = None
+        if 'method' in pooled.columns:
+            tools = sorted({str(m).split('|', 1)[0] for m in pooled['method']})
+            method_display = {tool: pretty_tool(tool) for tool in tools}
         mcb_mod.run_ploidy_mcb(
             pooled, F'{known.output}.pooled.stats.mcb',
             already_pooled=True, long_tab=long_tab,
             n_resamples=known.stats_boot, seed=known.stats_seed,
             alpha=known.stats_alpha,
             write_tex=known.latex_table_auto,
-            table_label='tab:scwgs-ploidy-mcb')
+            table_label='tab:scwgs-ploidy-mcb',
+            method_display=method_display)
         return True
     except Exception as exc:  # never break the pipeline on MCB
         logging.warning('MCB analysis failed (%s); the pairwise tests remain valid', exc)
@@ -3059,9 +3109,7 @@ def _auto_write_latex_table(known, ran_stats):
         F'{known.output}.pooled.stats.pairwise.tex',
         reference=known.stats_reference,
         table_label='tab:scwgs-ploidy-pairwise-pooled',
-        alpha=known.stats_alpha,
-        caption_note='(All panels pooled; repeated runs of one sample are merged, and '
-                     'each effective sample is one independent unit.)')
+        alpha=known.stats_alpha)
 
 
 def main(argv=None):
@@ -3083,9 +3131,7 @@ def main(argv=None):
             reference=known.stats_reference,
             legend_kind='ploidy',
             table_label='tab:scwgs-ploidy-pairwise-pooled',
-            alpha=known.stats_alpha,
-            caption_note='(All panels pooled; repeated runs of one sample are merged, '
-                         'and each effective sample is one independent unit.)')
+            alpha=known.stats_alpha)
     if known.stats_only:
         # [REV v4] iterate on the pooled tests without redrawing the figures.
         ran_stats = _run_ploidy_stats(known)

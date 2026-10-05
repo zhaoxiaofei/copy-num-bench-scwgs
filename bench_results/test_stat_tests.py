@@ -19,6 +19,7 @@ Part C  demo_independence_failure: Monte-Carlo simulation under a TRUE null
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -402,20 +403,48 @@ with open(long_tsv) as fh:
                          stdin=fh, capture_output=True, text=True, cwd=HERE)
 assert ret.returncode == 0, ret.stderr[-2000:]
 assert os.path.isfile(tex1), F'MISSING {tex1}'
+
+
+def _check_tex_columns(text, ncols):
+    """Assert that every table row occupies exactly `ncols` columns.
+
+    Rows are the lines ending in the LaTeX row terminator; a
+    \\multicolumn{N}{..}{..} cell counts as N columns.
+    """
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s or not s.endswith('\\\\'):
+            continue
+        if s.startswith('\\') and not s.startswith('\\multicolumn'):
+            continue
+        cells = 0
+        for part in s.split('&'):
+            m = re.match(r'\s*\\multicolumn\{(\d+)\}', part)
+            cells += int(m.group(1)) if m else 1
+        assert cells == ncols, \
+            F'LaTeX row carries {cells} columns, expected {ncols}: {s[:100]}'
+
+
 text = open(tex1).read()
-assert text.count(r'\multicolumn{4}{c}{Hap\_0}') == 1
-assert text.count(r'\multicolumn{4}{c}{Hap\_1}') == 1
-assert text.count(r'$n$ & $p$ & $r$ & 95\% CI') == 2
+assert text.count(r'\begin{landscape}') == 1 and text.count(r'\end{landscape}') == 1
+assert text.count(r'\captionof{table}{') == 1
+assert text.count(r'\begin{longtable}{llrrrrrrrr}') == 1
+assert text.count(r'\endfirsthead') == 1 and text.count(r'\endhead') == 1
+assert text.count(r'\endfoot') == 1
+assert text.count(r'\addtocounter{table}{-1}') == 1
+assert text.count(r'\multicolumn{4}{c}{Hap\_0}') == 2     # first head + head
+assert text.count(r'\multicolumn{4}{c}{Hap\_1}') == 2
+assert text.count(r'$n$ & $p$ & $r$ & \qty{95}{\percent} CI') == 4
 assert r'\cmidrule(lr){3-6}' in text and r'\cmidrule(lr){7-10}' in text
-assert 'Holm $p$' not in text and 'Median diff' not in text
+assert 'Holm $p$' not in text and 'Median diff' not in text and '95\\%' not in text
+_check_tex_columns(text, 10)
 body = [ln for ln in text.splitlines()
-        if ln.startswith('    ') and ln.rstrip().endswith('\\')
+        if ln.startswith('\t\t') and ln.rstrip().endswith('\\')
         and 'multicolumn' not in ln and '$n$ & $p$' not in ln
         and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
 assert body and all(ln.count('&') == 9 for ln in body), \
     'caller table rows must have exactly 10 cells (metric, caller_b, 8 statistics)'
-import re as _re
-assert len(_re.findall(r'\[-?\d+\.\d{2}, -?\d+\.\d{2}\]', text)) >= 2 * len(body) - 4
+assert len(re.findall(r'\[-?\d+\.\d{2}, -?\d+\.\d{2}\]', text)) >= 2 * len(body) - 4
 print(F'OK Part D.1: caller LaTeX table = n, p, r, CI per scenario ({len(body)} rows)')
 
 # D.2 - pooled ploidy table (stat_tests.py ploidy mode -> synthetic pooled
@@ -450,15 +479,26 @@ ret = subprocess.run([sys.executable, EVAL_P, '-o', ploidy_out, '--latex-table']
                      capture_output=True, text=True, cwd=HERE)
 assert ret.returncode == 0, ret.stderr[-2000:]
 text_p = ret.stdout
-assert '$n$ & $p$ & $r$ & 95\\% CI' in text_p
+assert text_p.count(r'\begin{table}[htbp]') == 1
+assert r'\caption{' in text_p and r'\label{tab:scwgs-ploidy-pairwise-pooled}' in text_p
+assert r'\begin{tabular}{lllrrr}' in text_p
+assert (r'Method $b$ & CN cap & $n$ & $p$ & $r$ & \qty{95}{\percent} CI'
+        in text_p)
+assert 'AneuFinder 2016' in text_p and 'CHISEL 2021' in text_p
+assert 'AneuFinder 2016 & 10 &' in text_p
+assert '|10' not in text_p and '|inf' not in text_p     # raw ids are rendered
 assert 'Median diff' not in text_p and 'Paired $n$' not in text_p
+assert '95\\%' not in text_p
+_check_tex_columns(text_p, 6)
 body_p = [ln for ln in text_p.splitlines()
-          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          if ln.startswith('\t\t') and ln.rstrip().endswith('\\')
           and '$n$ & $p$' not in ln and 'toprule' not in ln
           and 'midrule' not in ln and 'bottomrule' not in ln]
-assert body_p and all(ln.count('&') == 4 for ln in body_p), \
-    'ploidy table rows must have exactly 5 cells (method_b, n, p, r, CI)'
-print(F'OK Part D.2: pooled ploidy LaTeX table = n, p, r, CI ({len(body_p)} rows)')
+assert body_p and all(ln.count('&') == 5 for ln in body_p), \
+    'ploidy table rows must have exactly 6 cells (method_b, CN cap, n, p, r, CI)'
+assert any(' & none & ' in ln for ln in body_p), 'uncapped rows must show "none"'
+print(F'OK Part D.2: pooled ploidy LaTeX table = method, CN cap, n, p, r, CI '
+      F'({len(body_p)} rows)')
 
 # ------------------------------------------------------------------ Part C --
 def demo_independence_failure(n_reps=300, n_clusters=45, n_total=1989,
@@ -676,25 +716,33 @@ print(F'OK F.3: eval script writes MCB + Fig. 2 source data by default '
 
 # F.4 - LaTeX regression of the two MCB tables
 text_m = open(os.path.join(OUT, 'fig2tex.stats.mcb.tex')).read()
-assert text_m.count(r'\multicolumn{4}{c}{Hap\_0}') == 1
-assert text_m.count(r'\multicolumn{4}{c}{Hap\_1}') == 1
-assert text_m.count(r'$n$ & $p$ & $r$ & 95\% CI') == 2
+assert text_m.count(r'\begin{landscape}') == 1
+assert text_m.count(r'\begin{longtable}{llrrrrrrrr}') == 1
+assert text_m.count(r'\multicolumn{4}{c}{Hap\_0}') == 2
+assert text_m.count(r'\multicolumn{4}{c}{Hap\_1}') == 2
+assert text_m.count(r'$n$ & $p$ & $r$ & \qty{95}{\percent} CI') == 4
 assert 'Ginkgo' in text_m
+assert '95\\%' not in text_m
+_check_tex_columns(text_m, 10)
 body_m = [ln for ln in text_m.splitlines()
-          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          if ln.startswith('\t\t') and ln.rstrip().endswith('\\')
           and 'multicolumn' not in ln and '$n$ & $p$' not in ln
           and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
 assert body_m and all(ln.count('&') == 9 for ln in body_m), \
     'caller MCB rows must have exactly 10 cells (metric, caller, 8 statistics)'
 text_p = open(mcb_out_p + '.pooled.stats.mcb.tex').read()
-assert text_p.count('multicolumn{5}{l}') == 5          # pooled + 4 panels
-assert r'$n$ & $p$ & $r$ & 95\% CI' in text_p
+assert text_p.count(r'\begin{landscape}') == 1
+assert text_p.count(r'\begin{longtable}{llrrrr}') == 1
+assert text_p.count(r'\multicolumn{6}{l}') == 5          # pooled + 4 panels
+assert r'Method & CN cap & $n$ & $p$ & $r$ & \qty{95}{\percent} CI' in text_p
+assert '95\\%' not in text_p
+_check_tex_columns(text_p, 6)
 body_p = [ln for ln in text_p.splitlines()
-          if ln.startswith('    ') and ln.rstrip().endswith('\\')
+          if ln.startswith('\t\t') and ln.rstrip().endswith('\\')
           and 'multicolumn' not in ln and '$n$ & $p$' not in ln
           and 'toprule' not in ln and 'midrule' not in ln and 'bottomrule' not in ln]
-assert body_p and all(ln.count('&') == 4 for ln in body_p), \
-    'ploidy MCB rows must have exactly 5 cells (method, n, p, r, CI)'
+assert body_p and all(ln.count('&') == 5 for ln in body_p), \
+    'ploidy MCB rows must have exactly 6 cells (method, CN cap, n, p, r, CI)'
 print(F'OK F.4: MCB LaTeX tables carry exactly n, p, r, CI '
       f'({len(body_m)} caller rows; {len(body_p)} ploidy rows)')
 
@@ -708,7 +756,11 @@ if shutil.which('tectonic'):
                     os.path.join(tex_dir, 'ploidy.tex'))
     wrap = os.path.join(tex_dir, 'wrap.tex')
     with open(wrap, 'w') as fh:
-        fh.write('\\documentclass{article}\\usepackage{booktabs}\\begin{document}'
+        fh.write('\\documentclass{article}\n'
+                 '\\usepackage{booktabs}\n\\usepackage{longtable}\n'
+                 '\\usepackage{pdflscape}\n\\usepackage{caption}\n'
+                 '\\usepackage{siunitx}\n'
+                 '\\begin{document}\n'
                  '\\input{caller.tex}\\input{ploidy.tex}\\end{document}\n')
     ret = subprocess.run(['tectonic', 'wrap.tex'], cwd=tex_dir,
                          capture_output=True, text=True)
