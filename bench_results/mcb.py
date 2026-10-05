@@ -56,7 +56,10 @@ downsamplings of only nine donors), the pooled donor for Fig. 3 - exactly as
 in stat_tests.py: per-unit medians of the per-cell values first, MCB on the
 resulting n x k complete-block matrix afterwards (units with any missing
 method are dropped and counted; methods missing everywhere are dropped from
-the family).
+the family).  Repeated runs of one biological sample are merged into one
+effective unit before that matrix is built (Fig. 3: the three MDA-MB-231
+ACT samples and the 36 bp / 152 bp runs of TN6 / TN7 count once each;
+stat_tests.canonical_ploidy_sample).
 
 For the complete-block matrix X (n units x k methods, higher = better):
 
@@ -553,9 +556,12 @@ def _ploidy_pool(tab, cluster_key_cols=None, cluster_agg='median', naive=False):
 
     Mirrors the evaluation script's _pool_units semantics for the standalone
     CLI: unit = the requested cluster column(s) (default 'donor') when usable,
-    otherwise the donor parsed from the dataset label; non-failed rows are
-    preferred; the value is the median over the unit's usable rows.  Returns
-    (pooled DataFrame with columns unit/method/pct_within, n_fallback)."""
+    otherwise the donor parsed from the dataset label; correlated runs of one
+    biological sample (MDA-MB-231 x3, TN6/TN7 read lengths) are mapped to one
+    effective-sample id with stat_tests.canonical_ploidy_sample, so they can
+    never enter the MCB as independent units; non-failed rows are preferred;
+    the value is the median over the unit's usable rows.  Returns (pooled
+    DataFrame with columns unit/method/pct_within, n_fallback)."""
     tab = _ploidy_clean(tab)
     cluster_cols = [c for c in (cluster_key_cols or ['donor']) if c in tab.columns]
     units = []
@@ -570,6 +576,8 @@ def _ploidy_pool(tab, cluster_key_cols=None, cluster_agg='median', naive=False):
             u = _ploidy_unit_from_label(row['dataset'], split=not naive)
             if cluster_cols and not naive:
                 n_fallback += 1
+        if u is not None and not naive:
+            u = _ST.canonical_ploidy_sample(u)
         units.append(u)
     tab['_unit'] = units
     tab = tab[tab['_unit'].notna()]
@@ -590,7 +598,10 @@ def _ploidy_panel_families(tab, cluster_agg='median'):
     stat_tests.run_ploidy_benchmark_stats (a real-tumor sample is its own
     unit; missing donor metadata collapses to a shared '(missing)' cluster
     only when the whole chain is unusable, which the chain prevents by its
-    dataset column)."""
+    dataset column).  The chosen unit labels are then collapsed with
+    stat_tests.canonical_ploidy_sample, so repeated runs of one biological
+    sample (MDA-MB-231 as MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31, TN6 /
+    TN7 at 36 bp and 152 bp, ...) contribute ONE unit each."""
     tab = _ploidy_clean(tab)
     chain = list(_ST.PLOIDY_CLUSTER_FALLBACK_CHAIN)
     for plot, sub in tab.groupby('plot', sort=True):
@@ -607,6 +618,8 @@ def _ploidy_panel_families(tab, cluster_agg='median'):
             logging.warning('mcb: panel %s has no usable cluster column; using the '
                             'dataset label as the unit', plot)
             chosen, unit_vals = 'dataset', sub['dataset'].map(_ST._norm_missing)
+        unit_vals = unit_vals.map(
+            lambda v: _ST.canonical_ploidy_sample(v) if v else v)
         sub = sub.copy()
         sub['_unit'] = unit_vals.to_numpy()
         rows = []

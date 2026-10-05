@@ -65,7 +65,11 @@ observations. For this benchmark that assumption is NOT credible:
 * Fig. 3: within a germline-derived plot group the "datasets" are
   (donor, sampleType, avgSpotLen) combinations - several datasets share one
   donor's biological material, and every dataset of a group shares the same
-  simulated cell-line template.
+  simulated cell-line template.  The ACT group mixes truly independent
+  samples (one per tumour / cell line) with repeated runs of ONE sample: the
+  three MDA-MB-231 samples (MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31) are
+  the same cell line, and TN6 / TN7 were each sequenced at two read lengths.
+  Counting those runs separately is pseudoreplication too.
 
 WHAT HAPPENS IF THE ASSUMPTION FAILS (it does, to a measurable degree):
 classic pseudoreplication. The null variance of the Wilcoxon signed-rank /
@@ -117,7 +121,16 @@ comparisons:
 * Fig. 3: per plot group the first usable column of donor -> cellLine ->
   dataset defines the clusters (a real-tumor sample is its own unit; a
   missing donor label collapses to one shared '(missing)' cluster, which is
-  the conservative choice).
+  the conservative choice).  Independently of the chain, every label is
+  resolved through the explicit primary-sample table PLOIDY_SAMPLE_DATASETS
+  (primary sample -> derived sample names; see canonical_ploidy_sample):
+  MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31 are listed under ONE
+  MDA-MB-231 primary sample and the read-length runs of TN6 / TN7 under their
+  tumour, so each contributes ONE unit (a label not listed stays its own
+  unit).  The runs of a unit are aggregated to a per-method median BEFORE any
+  test or effect-size computation, so n, the signed ranks, the matched-pairs
+  rank-biserial r (with its bootstrap CI), the common-language effect size
+  and the median difference all refer to effective samples, not runs.
 
 Estimand note: the cluster-level tests target the cluster-population
 generalisation ("on a NEW donor, does caller A beat caller B?"), each cluster
@@ -170,6 +183,7 @@ import json
 import logging
 import os
 import platform
+import re
 import sys
 import warnings
 
@@ -207,6 +221,100 @@ DEFAULT_CLUSTER_KEY = ['donor']
 # real-tumor sample with no donor metadata ends up clustered by dataset,
 # which is the honest choice for samples from different patients).
 PLOIDY_CLUSTER_FALLBACK_CHAIN = ['donor', 'cellLine', 'dataset']
+
+# --------------------------------------------------------------------------- #
+# Primary samples -> derived sample names (Fig. 3, ACT arm)                    #
+# --------------------------------------------------------------------------- #
+# One entry per INDEPENDENT biological sample of the ACT arm (Minussi 2021,
+# PRJNA629885), listing the DERIVED sample names as they occur in the ploidy
+# benchmark.  The runs of one primary sample are not independent - MDA-MB-231
+# enters as three preparations (MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31,
+# all the same cell line with FACS/DAPI ploidy 2.41) and TN6/TN7 were each
+# sequenced at two read lengths - so all derived names of one primary sample
+# are ONE effective sample: their rows are aggregated to ONE observation per
+# method (median, like every other cluster aggregation in this module) BEFORE
+# any test or effect-size computation, and each effective sample therefore
+# contributes exactly one paired difference, one rank and one bootstrap unit
+# to the reported effect sizes.
+#
+# Add every new sample here.  The resolver does exact lookups on normalised
+# names (case/punctuation-folded, with the accession prefix and the
+# ' · <avgSpotLen> bp' figure suffix stripped); anything not listed is kept
+# as its own unit - the conservative choice, never a silent merge.  The
+# cell-level alias spellings of ploidy.PRJNA629885.tsv belong to the
+# per-cell ploidy evaluation (ploidy_eval.py), not to these unit ids.
+PLOIDY_SAMPLE_DATASETS = {
+    'MDAMB231': ('MDAMB231c28', 'MDAMB231c8', 'MDAMB231_popp31'),
+    'TN1': ('TN1',),
+    'TN2': ('TN2',),
+    'TN3': ('TN3',),
+    'TN4': ('TN4',),
+    'TN5': ('TN5',),
+    'TN6': ('TN6',),
+    'TN7': ('TN7',),
+    'TN8': ('TN8',),
+    'BT20': ('BT20',),
+    'mb157': ('mb157',),
+    'mb453': ('mb453',),
+}
+
+# Accession-style prefix of a donor column value, e.g. SRP259526_TN6.
+_PLOIDY_ACCESSION_PREFIX_RE = re.compile(r'^(?:srp|prjna|erp|drp|sra|gsm|srx)\d+')
+
+
+def _fold_ploidy_sample_token(text):
+    """Case/punctuation-insensitive key of one sample-spelling token."""
+    return re.sub(r'[^a-z0-9]', '', str(text).lower())
+
+
+_PLOIDY_SAMPLE_INDEX = {
+    _fold_ploidy_sample_token(derived): primary
+    for primary, derived_names in PLOIDY_SAMPLE_DATASETS.items()
+    for derived in derived_names
+}
+
+
+def ploidy_sample_key(name):
+    """Primary (effective) sample of one ACT sample spelling, or None.
+
+    Accepts the spellings that occur in the pipeline: bare sample ids
+    ('MDAMB231c28', 'TN6'), accession-prefixed donor ids
+    ('SRP259526_MDAMB231c28') and figure row labels ('TN6 · 152 bp').
+    Returns None for anything not listed in PLOIDY_SAMPLE_DATASETS (e.g.
+    germline donors such as 'S01' / '345HS1'), so unknown ACT samples can be
+    reported by the caller instead of being silently split or merged.
+    """
+    if name is None:
+        return None
+    s = str(name).strip()
+    if not s or s.lower() in ('none', 'nan', 'nat', 'null'):
+        return None
+    head = s
+    for sep in ('·', '•'):
+        if sep in head:
+            head = head.split(sep, 1)[0].strip() or head
+            break
+    folded = _PLOIDY_ACCESSION_PREFIX_RE.sub(
+        '', _fold_ploidy_sample_token(head))
+    return _PLOIDY_SAMPLE_INDEX.get(folded)
+
+
+def canonical_ploidy_sample(name):
+    """Canonical EFFECTIVE-SAMPLE id of one ploidy-benchmark unit label.
+
+    Returns the primary sample of PLOIDY_SAMPLE_DATASETS when the label is
+    recognised ('MDAMB231' for every MDA-MB-231 run, 'TN6' for both read
+    lengths of TN6, ...), else the trimmed input unchanged (germline donors
+    such as 'S01' / '345HS1', '(missing)', '').  Used by every statistical
+    consumer of a ploidy table before units are grouped, so correlated runs
+    cannot enter a test as independent samples.
+    """
+    if name is None:
+        return name
+    s = str(name).strip()
+    key = ploidy_sample_key(s)
+    return key if key is not None else s
+
 
 # Cluster bootstrap runtime cap (the pairwise loop can run >100 comparisons).
 MAX_CLUSTER_BOOTSTRAP = 5000
@@ -1027,7 +1135,8 @@ def _write_tables(out_prefix, pairwise_rows, friedman_rows, concordance_rows,
 # --------------------------------------------------------------------------- #
 def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
                                cluster_key_cols=None, cluster_agg='median',
-                               n_resamples=10000, seed=1, alpha=0.05):
+                               n_resamples=10000, seed=1, alpha=0.05,
+                               extra_settings=None):
     """Statistical tests for the ploidy-estimation benchmark (Fig. 3).
 
     tab: the *_pct_within_long.tsv table written by
@@ -1040,6 +1149,13 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
     donor -> cellLine -> dataset defines the independent units (datasets of
     one germline donor share that donor's material, so per-method results on
     them are correlated); [] -> naive per-dataset mode; a list -> custom chain.
+    Independently of the chain, recognised runs of one biological sample are
+    first mapped to one effective sample (canonical_ploidy_sample): the three
+    MDA-MB-231 ACT samples (MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31) and
+    the read-length variants of one TN tumour are each ONE unit, so tests and
+    effect sizes are computed on the merged unit values.
+    extra_settings: optional dict merged into the written .stats.json (e.g.
+    the caller's provenance of which runs were merged into which unit).
     Writes the same .stats.* files.
     """
     if not _HAVE_SCIPY:
@@ -1082,7 +1198,12 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
             vals = sub[cand].map(_norm_missing)
             uniq = sorted(set(v for v in vals.unique() if v != ''))
             if len(uniq) >= 2:
-                return cand, vals
+                # Correlated runs of one biological sample (MDA-MB-231 x3,
+                # TN6/TN7 x2 read lengths, ...) collapse to ONE cluster id,
+                # so every downstream test and effect size sees one
+                # observation per effective sample.
+                return cand, vals.map(
+                    lambda v: canonical_ploidy_sample(v) if v else v)
             logging.info('plot %s: cluster column %r is missing or constant; '
                          'trying the next column', plot, cand)
         return None, None
@@ -1093,6 +1214,22 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
         'design': 'randomized complete block; percentages paired by dataset (sample) '
                   'within each plot group; inference aggregated to the independent '
                   'unit (cluster) selected per plot group',
+        'effective_sample_merging': {
+            'rule': 'runs / preparations of one biological sample are aggregated '
+                    'to ONE effective sample per method before any test or '
+                    'effect-size computation, so each effective sample contributes '
+                    'exactly one paired difference, one rank and one bootstrap unit',
+            'aggregation': F'per-method {cluster_agg} across the runs of an '
+                           'effective sample (the median of two runs for the '
+                           'TN6/TN7 read-length pairs)',
+            'primary_samples': {k: list(v)
+                                for k, v in PLOIDY_SAMPLE_DATASETS.items()},
+            'note': 'primary sample -> derived sample names as listed in '
+                    'PLOIDY_SAMPLE_DATASETS; a label not listed stays its own '
+                    'unit.  The read-length runs of TN6/TN7 therefore contribute '
+                    'one unit each although the balloon figure shows their '
+                    '36 bp and 152 bp runs as separate rows',
+        },
         'independence': {
             'pairing': 'all methods evaluated on the same datasets; percentages '
                        'paired by dataset within each plot group',
@@ -1217,6 +1354,9 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
     for r in pairwise_rows:
         r.setdefault('pvalue_holm', float('nan'))
         r.setdefault('reject_holm', '')
+
+    if extra_settings:
+        settings.update(extra_settings)
 
     _write_tables(out_prefix, pairwise_rows, friedman_rows, [], settings,
                   ('plot', 'method_a', 'method_b'))

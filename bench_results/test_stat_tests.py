@@ -258,6 +258,133 @@ for f in ['fig2stats.stats.pairwise.tsv', 'fig2stats.stats.friedman.tsv',
     assert os.path.isfile(p), F'MISSING {p}'
     print(F'OK {f}: {os.path.getsize(p)} bytes')
 
+# ------------------------------------------------- Part B2: merged runs ---
+# Repeated runs of ONE biological sample must count as ONE effective sample
+# in every statistical consumer (pairwise, Friedman, effect sizes and MCB):
+# MDA-MB-231 enters the ACT arm as MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31
+# and TN6 as a 36 bp + a 152 bp run.  The per-run values below have easy
+# medians (MDA-MB-231: median(90, 80, 100) = 90; TN6: median(60, 40) = 50).
+assert stat_tests.canonical_ploidy_sample('MDAMB231c28') == 'MDAMB231'
+assert stat_tests.canonical_ploidy_sample('SRP259526_MDAMB231c8') == 'MDAMB231'
+assert stat_tests.canonical_ploidy_sample('SRP259526_MDAMB231_popp31') == 'MDAMB231'
+assert stat_tests.canonical_ploidy_sample('MDAMB231c28 · 50 bp') == 'MDAMB231'
+assert stat_tests.canonical_ploidy_sample('TN6 · 152 bp') == 'TN6'
+assert stat_tests.canonical_ploidy_sample('SRP259526_TN6') == 'TN6'
+assert stat_tests.canonical_ploidy_sample('S01') == 'S01'
+assert stat_tests.canonical_ploidy_sample('345HS1') == '345HS1'
+# a label not listed in the table stays its own unit (and is reported)
+assert stat_tests.canonical_ploidy_sample('NEWSAMPLE · 50 bp') == 'NEWSAMPLE · 50 bp'
+assert stat_tests.ploidy_sample_key('NEWSAMPLE · 50 bp') is None
+assert stat_tests.PLOIDY_SAMPLE_DATASETS['MDAMB231'] == (
+    'MDAMB231c28', 'MDAMB231c8', 'MDAMB231_popp31')
+print('OK fig3merge: canonical effective-sample ids (MDA-MB-231 x3, TN6 runs)')
+
+MERGE_METHODS = [('ginkgo', '10'), ('aneufinder', '10'), ('hmmcopy', '10')]
+merge_rows = []
+for ds, donor, spot, vals in [
+        ('MDAMB231c28 · 50 bp', 'SRP259526_MDAMB231c28', '50', (90.0, 80.0, 70.0)),
+        ('MDAMB231c8 · 50 bp', 'SRP259526_MDAMB231c8', '50', (80.0, 70.0, 60.0)),
+        ('MDAMB231_popp31 · 50 bp', 'SRP259526_MDAMB231_popp31', '50', (100.0, 90.0, 50.0)),
+        ('TN6 · 36 bp', 'SRP259526_TN6', '36', (60.0, 50.0, 40.0)),
+        ('TN6 · 152 bp', 'SRP259526_TN6', '152', (40.0, 30.0, 20.0)),
+        ('TN1 · 50 bp', 'SRP259526_TN1', '50', (70.0, 60.0, 30.0))]:
+    for (tool, cap), pct in zip(MERGE_METHODS, vals):
+        merge_rows.append({'plot': 'ACT', 'dataset': ds, 'tool': tool, 'max_cn': cap,
+                           'method': F'{tool}|{cap}', 'window': 0.5,
+                           'n_cells': 300, 'n_cells_finite': 280, 'pct_within': pct,
+                           'mean_abs_ploidy_error': 0.2, 'failed': False, 'donor': donor,
+                           'sampleType': 'NA_ILLUMINA', 'avgSpotLen': spot, 'cellLine': ''})
+merge_df = pd.DataFrame(merge_rows)
+merge_tsv = os.path.join(OUT, 'fig3merge_pct_within_long.tsv')
+merge_df.to_csv(merge_tsv, sep='\t', index=False)
+
+# B2.1 standalone stat_tests: the ACT group collapses 6 datasets into 3 units
+ret = subprocess.run([sys.executable, STAT, '-i', merge_tsv,
+                      '-o', os.path.join(OUT, 'fig3merge_raw'),
+                      '--reference', 'ginkgo|10', '--boot', '300'],
+                     capture_output=True, text=True)
+print('Fig. 3 mode (correlated-run merge, standalone) exit code:', ret.returncode)
+if ret.returncode != 0:
+    print(ret.stdout); print(ret.stderr)
+    sys.exit(1)
+pw_m = pd.read_csv(os.path.join(OUT, 'fig3merge_raw.stats.pairwise.tsv'), sep='\t')
+assert pw_m['n_pairs'].eq(3).all(), pw_m[['method_b', 'n_pairs', 'n_clusters']]
+assert pw_m['n_clusters'].eq(3).all()
+with open(os.path.join(OUT, 'fig3merge_raw.stats.json')) as fh:
+    js_m = json.load(fh)
+assert js_m['independence']['per_plot_group']['ACT']['n_clusters'] == 3, \
+    js_m['independence']['per_plot_group']
+assert js_m['effective_sample_merging']['primary_samples']['MDAMB231'] == [
+    'MDAMB231c28', 'MDAMB231c8', 'MDAMB231_popp31']
+print('OK fig3merge: standalone tests run on 3 effective samples, not 6 datasets')
+
+# B2.2 MCB panel family uses the same merged units (medians verified)
+sys.path.insert(0, HERE)
+import mcb as _mcb  # noqa: E402
+act_fam = next(f for f in _mcb._ploidy_panel_families(merge_df) if f['panel'] == 'ACT')
+assert set(act_fam['matrix'].index) == {'MDAMB231', 'TN6', 'TN1'}, act_fam['matrix'].index
+assert act_fam['matrix'].loc['MDAMB231', 'ginkgo|10'] == 90.0
+assert act_fam['matrix'].loc['TN6', 'ginkgo|10'] == 50.0
+assert act_fam['matrix'].loc['TN1', 'ginkgo|10'] == 70.0
+print('OK fig3merge: MCB panel uses one row per effective sample (merged medians)')
+
+# B2.3 pooled pipeline path: one pooled row per effective sample x method, the
+#      per-run values merged by median, and the pooling provenance recorded.
+EVAL_P = os.path.join(HERE, 'scWGS-ploidy-performances-eval.py')
+ret = subprocess.run([sys.executable, EVAL_P, '--stats-only', '--no-mcb',
+                      '-o', os.path.join(OUT, 'fig3merge'), '--stats-boot', '300'],
+                     capture_output=True, text=True, cwd=HERE)
+print('Fig. 3 pooled stats (correlated-run merge) exit code:', ret.returncode)
+if ret.returncode != 0:
+    print(ret.stdout); print(ret.stderr)
+    sys.exit(1)
+pool_m = pd.read_csv(os.path.join(OUT, 'fig3merge.pooled.long.tsv'), sep='\t')
+gink = pool_m[pool_m['method'] == 'ginkgo|10'].set_index('dataset')
+assert set(gink.index) == {'MDAMB231', 'TN6', 'TN1'}, gink.index
+assert gink.loc['MDAMB231', 'pct_within'] == 90.0
+assert gink.loc['TN6', 'pct_within'] == 50.0
+assert gink.loc['TN1', 'pct_within'] == 70.0
+mda_prov = pool_m[(pool_m['dataset'] == 'MDAMB231')
+                  & (pool_m['method'] == 'ginkgo|10')].iloc[0]
+assert mda_prov['n_source_rows'] == 3
+assert 'MDAMB231c28' in mda_prov['source_datasets']
+assert 'MDAMB231_popp31' in mda_prov['source_datasets']
+pw_p = pd.read_csv(os.path.join(OUT, 'fig3merge.pooled.stats.pairwise.tsv'), sep='\t')
+assert pw_p['n_pairs'].eq(3).all()
+with open(os.path.join(OUT, 'fig3merge.pooled.stats.json')) as fh:
+    js_p = json.load(fh)
+merged_units = {g['unit']: g for g in js_p['pooling']['merged_units']}
+assert merged_units['MDAMB231']['n_runs'] == 3 and merged_units['TN6']['n_runs'] == 2
+print('OK fig3merge: pooled pipeline merges MDA-MB-231 x3 and TN6 x2 into one unit each')
+
+# B2.4 an ACT sample that is NOT listed in PLOIDY_SAMPLE_DATASETS must be
+#      reported and kept as its own unit - never guessed or merged silently.
+import importlib.util as _ilu  # noqa: E402
+import logging as _logging  # noqa: E402
+_spec = _ilu.spec_from_file_location('ploidy_eval_for_merge', EVAL_P)
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+unknown_df = merge_df.copy()
+unknown_df.loc[unknown_df['dataset'] == 'TN1 · 50 bp', 'dataset'] = 'NEWSAMPLE · 50 bp'
+unknown_df.loc[unknown_df['dataset'] == 'NEWSAMPLE · 50 bp', 'donor'] = 'SRP259526_NEWSAMPLE'
+_captured = []
+
+
+class _Cap(_logging.Handler):
+    def emit(self, record):
+        _captured.append(record.getMessage())
+
+
+_root = _logging.getLogger()
+_root.addHandler(_Cap())
+try:
+    _pooled_u, _prov_u, _cols_u, _fb_u = _mod._pool_units(unknown_df, ['donor'])
+finally:
+    _root.handlers = [h for h in _root.handlers if not isinstance(h, _Cap)]
+assert set(_pooled_u['dataset']) == {'MDAMB231', 'TN6', 'SRP259526_NEWSAMPLE'}
+assert any('NEWSAMPLE' in m and 'PLOIDY_SAMPLE_DATASETS' in m for m in _captured), _captured
+print('OK fig3merge: unlisted ACT sample warned about and kept as its own unit')
+
 # ------------------------------------------------------------------ Part D --
 # LaTeX table regression: the booktabs tables written by the two evaluation
 # scripts must carry, per comparison, EXACTLY the four statistics

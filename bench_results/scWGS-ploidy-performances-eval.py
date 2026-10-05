@@ -62,14 +62,23 @@ collision-free two-tier x-axis labels.
 Statistical tests (ONE pooled family over all donors)
 -----------------------------------------------------
 After the figures, the ploidy benchmark is tested ONCE over the pooled set of
-ALL donors from ALL four panels (COLO-829, HCC1395, HeLa, ACT).  Every
-donor's per-dataset evaluations -- across the panels, sample types and read
-lengths in which that donor occurs -- are aggregated into ONE observation per
-method (the median, non-failed rows preferred), so each donor is exactly one
-independent sample and the pooled table keeps one row per (donor, method).
-The Friedman omnibus and the two-sided Wilcoxon signed-rank post-hoc tests
-(paired by donor, Holm-corrected over the whole donor pool, effect sizes, BCa
-bootstrap CIs) are run on this pooled table and written to a single set of
+ALL independent units from ALL four panels (COLO-829, HCC1395, HeLa, ACT).
+Every donor's per-dataset evaluations -- across the panels, sample types and
+read lengths in which that donor occurs -- are aggregated into ONE observation
+per method (the median, non-failed rows preferred), so each donor is exactly
+one independent sample and the pooled table keeps one row per (unit, method).
+Repeated sequencing runs of ONE biological sample are merged into one
+effective sample the same way (``stat_tests.canonical_ploidy_sample``): the
+three MDA-MB-231 ACT samples -- MDAMB231c28, MDAMB231c8 and
+MDAMB231_popp31, all the same cell line -- collapse to one MDA-MB-231 unit,
+and the 36 bp / 152 bp runs of TN6, TN7 and any other multi-avgSpotLen sample
+collapse to one unit per sample (each run still has its own row in the
+balloon figure).  The Friedman omnibus and the two-sided Wilcoxon signed-rank
+post-hoc tests (paired by effective sample, Holm-corrected over the whole
+pool) are run on this pooled table, and every effect size (matched-pairs
+rank-biserial r with its bootstrap CI, the common-language effect size, the
+median difference) is computed on the merged units -- one paired difference
+and one bootstrap unit per effective sample.  Results are written to a single set of
 ``<output>.pooled.stats.*.tsv`` files.  The LaTeX table is written BY DEFAULT
 to ``<output>.pooled.stats.pairwise.tex`` after every successful pooled-stats
 run (``--no-latex-table`` disables this); ``--latex-table`` prints it to
@@ -90,13 +99,18 @@ each figure is ``<donor> - <sampleType> - <avgSpotLen> bp``.
 Real cancer-derived (ACT): a dataset is the original sample name (TN1, TN2,
 ... and the ACT cell-line samples) TOGETHER WITH the average spot length
 (read length) of its sequencing run, and the row label is
-``<sample> · <avgSpotLen> bp``.  This matters because TN6 and TN7 were each
+``<sample> · <avgSpotLen> bp``.  Three of the ACT samples are preparations of
+the same MDA-MB-231 cell line (MDAMB231c28, MDAMB231c8, MDAMB231_popp31).
+This matters because TN6 and TN7 were each
 sequenced at two read lengths (36 bp and 152 bp): a bare sample id is
 ambiguous, since the two runs differ in both the number of evaluable cells
 (TN6: 173 cells at 152 bp vs 1205 at 36 bp; TN7: 486 vs 907) and the
 percentage of cells inside the ploidy window.  Each run is therefore drawn as
-its own row.  There is a single ACT figure; one ploidy-eval summary that
-covers many samples is split on the per-cell ``sample`` column.
+its own row.  The row identity is descriptive; for the STATISTICS the runs of
+one sample are merged into one effective sample (see above), because they are
+correlated observations of the same tumour / cell line, not independent
+samples.  There is a single ACT figure; one ploidy-eval summary that covers
+many samples is split on the per-cell ``sample`` column.
 
 Input
 -----
@@ -2195,19 +2209,22 @@ def _ploidy_legend(ref_desc, show_panel_col=False, show_ref_col=False):
     return (
         'Pairwise comparison of ploidy-estimation accuracy between the reference method '
         F'{ref_clause} and each other method ($b$), {panel_clause}pooled over all four '
-        'benchmark panels (COLO-829, HCC1395, HeLa, ACT). Every donor contributes ONE '
-        'observation per method -- the median of that donor\'s per-dataset evaluations '
-        'across all panels in which it occurs, preferring non-failed rows -- so each '
-        'donor is one independent sample (the same germline donors underlie the three '
-        'simulated cell-line panels). The metric is the percentage of cells whose ploidy '
-        'estimate is within $\\pm$0.5 of the ground truth. Each row reports, in this '
-        'order: $n$, the effective sample size (number of donors paired for that '
-        'comparison); $p$, the two-sided Wilcoxon signed-rank test on the paired '
-        'per-donor differences, Holm--Bonferroni-adjusted within the single pooled '
-        'family, bold at the 0.05 family-wise level; $r$, the matched-pairs '
-        'rank-biserial correlation on the per-donor differences (positive means the '
-        'reference outperforms method $b$); and the 95\\% percentile-bootstrap CI of '
-        '$r$ obtained by resampling the donors.'
+        'benchmark panels (COLO-829, HCC1395, HeLa, ACT). Every effective sample '
+        'contributes ONE observation per method -- the median of that sample\'s '
+        'per-dataset evaluations across all panels and sequencing runs in which it '
+        'occurs, preferring non-failed rows -- so each donor, tumour or cell line is '
+        'one independent sample (the same germline donors underlie the three simulated '
+        'cell-line panels), and repeated runs of one sample are merged: MDA-MB-231 '
+        '(MDAMB231c28, MDAMB231c8, MDAMB231_popp31) and the 36 bp / 152 bp runs of TN6 '
+        'and TN7 each contribute one sample. The metric is the percentage of cells '
+        'whose ploidy estimate is within $\\pm$0.5 of the ground truth. Each row '
+        'reports, in this order: $n$, the effective sample size (number of samples '
+        'paired for that comparison); $p$, the two-sided Wilcoxon signed-rank test on '
+        'the paired per-sample differences, Holm--Bonferroni-adjusted within the '
+        'single pooled family, bold at the 0.05 family-wise level; $r$, the '
+        'matched-pairs rank-biserial correlation on the per-sample differences '
+        '(positive means the reference outperforms method $b$); and the 95\\% '
+        'percentile-bootstrap CI of $r$ obtained by resampling the samples.'
     )
 
 
@@ -2477,6 +2494,40 @@ def _donor_from_dataset_label(label, split=True):
     return s
 
 
+def _canonical_ploidy_sample(name):
+    """Effective-sample id of a ploidy unit label (stat_tests helper).
+
+    stat_tests.canonical_ploidy_sample resolves a label through the explicit
+    primary-sample table (stat_tests.PLOIDY_SAMPLE_DATASETS: MDA-MB-231 as
+    MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31, TN6/TN7 read-length runs,
+    ...), so repeated runs of one biological sample collapse onto one
+    effective-sample id and the pooled tests cannot count them as independent
+    samples.  Imported lazily: a figure-only run without stat_tests.py simply
+    keeps the raw unit ids.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import stat_tests
+        return stat_tests.canonical_ploidy_sample(name)
+    except ImportError:  # pragma: no cover - stat_tests ships with the repo
+        return name
+
+
+def _ploidy_sample_key(name):
+    """Primary sample of an ACT label, or None when it is not listed
+    (stat_tests.ploidy_sample_key; lazy import like _canonical_ploidy_sample)."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import stat_tests
+        return stat_tests.ploidy_sample_key(name)
+    except ImportError:  # pragma: no cover - stat_tests ships with the repo
+        return None
+
+
 def _resolve_unit_ids(tab, cluster_key_cols, naive=False):
     """Independent-unit (donor) id for every row of the ploidy long table.
 
@@ -2486,6 +2537,16 @@ def _resolve_unit_ids(tab, cluster_key_cols, naive=False):
        usable;
     2. otherwise the donor parsed from the dataset label (first
        middle-dot-separated segment; the whole label in naive mode).
+
+    The resolved id is then mapped through the explicit primary-sample table
+    ``stat_tests.PLOIDY_SAMPLE_DATASETS`` (primary sample -> derived sample
+    names): all derived names of one primary sample -- e.g. the three
+    MDA-MB-231 samples (MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31) and the
+    36 bp / 152 bp runs of TN6 / TN7 -- share a single id and are therefore
+    aggregated into one effective sample before the tests (never in naive
+    mode, where the user explicitly asks for per-dataset units).  An ACT
+    label that is not listed is reported and kept as its own unit instead of
+    being silently split or merged.
 
     Because the germline-derived dataset labels -- and the donor column
     values, when present -- are identical in the three cell-line panels, this
@@ -2501,6 +2562,7 @@ def _resolve_unit_ids(tab, cluster_key_cols, naive=False):
                          'table; the affected rows fall back to the donor parsed '
                          'from the dataset label', ', '.join(map(str, missing)))
     units, n_fallback = [], 0
+    unknown_act = set()
     for _idx, row in tab.iterrows():
         u = None
         if (not naive) and cluster_cols:
@@ -2511,7 +2573,22 @@ def _resolve_unit_ids(tab, cluster_key_cols, naive=False):
             u = _donor_from_dataset_label(row['dataset'], split=not naive)
             if cluster_cols and not naive:
                 n_fallback += 1
+        if u is not None and not naive:
+            # Coverage check on the DATASET label (not the possibly
+            # multi-column cluster id): an ACT sample that is not listed in
+            # stat_tests.PLOIDY_SAMPLE_DATASETS is reported once and kept as
+            # its own unit, so a new sample can never be merged by accident.
+            if str(row.get('plot', '')).strip() == 'ACT':
+                label_head = _donor_from_dataset_label(row['dataset'], split=True)
+                if label_head and _ploidy_sample_key(label_head) is None:
+                    unknown_act.add(str(label_head))
+            u = _canonical_ploidy_sample(u)
         units.append(u)
+    if unknown_act:
+        logging.warning('ACT sample(s) %s are not listed in stat_tests.'
+                        'PLOIDY_SAMPLE_DATASETS; each is kept as its own effective '
+                        'sample.  Add the sample (with its derived names) to that '
+                        'table to merge its runs', ', '.join(sorted(unknown_act)))
     return pd.Series(units, index=tab.index), cluster_cols, n_fallback
 
 
@@ -2522,8 +2599,10 @@ def _pool_units(tab, cluster_key_cols, naive=False):
     not-applicable caller rows dropped).  Every independent unit's rows --
     which may span several panels (the germline donors are reused by the
     three simulated cell-line panels) and several datasets (sampleType /
-    avgSpotLen variants of the same donor) -- are reduced to a single
-    observation per method:
+    avgSpotLen variants of the same donor, or the repeated runs of one ACT
+    sample such as the three MDA-MB-231 samples and the two read lengths of
+    TN6 / TN7, which ``_resolve_unit_ids`` collapses onto one effective-sample
+    id) -- are reduced to a single observation per method:
 
     * non-failed rows are preferred, so a method that succeeded on a donor in
       at least one panel still contributes a valid observation;
@@ -2645,7 +2724,11 @@ def _stat_arg_parser():
                         'from the dataset label (its first middle-dot-separated '
                         'segment). Pass "none" to use the dataset label itself as '
                         'the unit (discouraged: datasets of the same donor then '
-                        'count as separate samples).')
+                        'count as separate samples). Repeated runs of one '
+                        'biological sample (MDA-MB-231 as MDAMB231c28 / '
+                        'MDAMB231c8 / MDAMB231_popp31, and the 36 bp / 152 bp '
+                        'runs of TN6, TN7, ...) always merge into ONE effective '
+                        'sample unless "none" is passed.')
     # [REV v4] iterate on the pooled tests without redrawing the figures.
     p.add_argument('--stats-only', action='store_true', default=False,
                    help='Run only the pooled ploidy statistical tests (all donors '
@@ -2693,14 +2776,22 @@ def _run_ploidy_stats(known):
     -- across the panels, sample types and read lengths in which the donor
     occurs -- into ONE observation per method (the median, matching the
     cluster aggregation used previously; non-failed rows are preferred).  The
-    resulting pooled table keeps exactly one row per (donor, method), so
+    same canonicalisation also merges repeated runs of ONE ACT biological
+    sample (``canonical_ploidy_sample``): MDAMB231c28 / MDAMB231c8 /
+    MDAMB231_popp31 become one MDA-MB-231 unit, and the 36 bp / 152 bp runs
+    of TN6, TN7 and any other multi-avgSpotLen sample collapse to one unit
+    per sample.  The resulting pooled table keeps exactly one row per
+    (effective sample, method), so
     ``stat_tests.run_ploidy_benchmark_stats`` is called ONCE on the whole
     pool: Friedman omnibus + two-sided Wilcoxon signed-rank post-hoc paired
-    by donor, Holm-corrected within each (scenario, metric) family over the
-    entire donor pool, with effect sizes and BCa bootstrap CIs.  A single set
-    of ``<output>.pooled.stats.*.tsv`` files is written; the pooled
-    donor-level table and its provenance are exported as
-    ``<output>.pooled.long.tsv`` for inspection.
+    by effective sample, Holm-corrected within each (scenario, metric) family
+    over the entire pool, with effect sizes (matched-pairs rank-biserial r,
+    common-language effect size, median difference) computed on the merged
+    units -- one paired difference and one bootstrap unit per effective
+    sample.  A single set of ``<output>.pooled.stats.*.tsv`` files is
+    written; the pooled effective-sample table and its provenance (including
+    which runs were merged) are exported as ``<output>.pooled.long.tsv`` and
+    recorded in ``<output>.pooled.stats.json`` for inspection.
 
     Returns True when the pooled tests ran and wrote their stats files, and
     False when they were skipped for any reason (missing stat_tests module,
@@ -2846,21 +2937,74 @@ def _run_ploidy_stats(known):
                         'Friedman/pairwise tests are not meaningful here', n_units, n_m)
         return False
 
+    # Provenance of the merge: which effective samples aggregated several
+    # source runs (correlated observations) before the tests.  prov carries
+    # one row per (unit, method), so the runs are collected per unit over all
+    # methods.
+    merged_units = []
+    if 'source_datasets' in prov.columns:
+        for unit, g in prov.groupby('pooled_unit', sort=True):
+            runs = sorted({r for s in g['source_datasets'].astype(str)
+                           for r in s.split('+') if r})
+            if len(runs) > 1:
+                merged_units.append({'unit': str(unit), 'n_runs': len(runs), 'runs': runs})
+    n_merged = len(merged_units)
+    if n_merged:
+        logging.info('pooled stats: %d effective sample(s) aggregate more than one source '
+                     'dataset/run (the germline donors across panels and read lengths, plus '
+                     'the repeated ACT runs such as MDA-MB-231 and TN6/TN7); each '
+                     'contributes ONE observation per method to the tests and effect sizes',
+                     n_merged)
+    if naive:
+        pooling_settings = {
+            'rule': 'NAIVE per-dataset mode requested (--stats-cluster-key none): runs '
+                    'of one biological sample are NOT merged and count as separate '
+                    'units (discouraged)',
+            'aggregation': 'none (each dataset label is its own unit)',
+            'merged_units': merged_units,
+        }
+    else:
+        pooling_settings = {
+            'rule': 'correlated runs of one biological sample (same tumour / cell '
+                    'line sequenced more than once) are aggregated to ONE effective '
+                    'sample per method before the tests; each effective sample then '
+                    'contributes one paired difference, one signed rank and one '
+                    'bootstrap unit, so the effect sizes (rank-biserial r, its 95% '
+                    'CI, the common-language effect size and the median difference) '
+                    'are the merged effect sizes',
+            'aggregation': "per-method median across a unit's usable source rows "
+                           '(non-failed rows preferred)',
+            'primary_samples': {k: list(v) for k, v in
+                                stat_tests.PLOIDY_SAMPLE_DATASETS.items()},
+            'note': 'primary sample -> derived sample names (stat_tests.'
+                    'PLOIDY_SAMPLE_DATASETS); labels not listed stay their own '
+                    'unit, so e.g. TN6/TN7 enter once although the ACT figure '
+                    'shows every read-length run as its own row',
+            'merged_units': merged_units,
+        }
+
     out_prefix = F'{known.output}.pooled'
     logging.info('running POOLED ploidy statistical tests over all donors of all panels '
                  '(%d independent units x %d methods; reference: %s; unit key: %s) -> %s.*.tsv',
                  n_units, n_m, known.stats_reference, unit_desc, out_prefix)
-    # cluster_key_cols=[] (naive per-dataset mode) is intentional: the pooled
-    # rows ARE the independent units (donors) already, so no further clustering
-    # must be applied inside stat_tests.
+    # The pooled rows ARE the independent effective samples (donors / cell
+    # lines / tumours, each with its correlated runs already merged by
+    # _pool_units).  Clustering on the unit column makes stat_tests infer at
+    # exactly that level (one cluster per effective sample) instead of
+    # labelling the pooled units "naive per-dataset/cell" observations; the
+    # tests and effect sizes are then computed on one value per effective
+    # sample, which is the merged effect size.  The explicit naive mode
+    # (--stats-cluster-key none) keeps the old per-dataset level and its
+    # warning flags.
     settings = stat_tests.run_ploidy_benchmark_stats(
         pooled, out_prefix,
         reference=known.stats_reference,
-        cluster_key_cols=[],
+        cluster_key_cols=([] if naive else ['dataset']),
         cluster_agg='median',
         n_resamples=known.stats_boot,
         seed=known.stats_seed,
-        alpha=known.stats_alpha)
+        alpha=known.stats_alpha,
+        extra_settings={'pooling': pooling_settings})
     ran_mcb = _run_ploidy_mcb(known, pooled, tab)
     return settings is not None or ran_mcb
 
@@ -2916,7 +3060,8 @@ def _auto_write_latex_table(known, ran_stats):
         reference=known.stats_reference,
         table_label='tab:scwgs-ploidy-pairwise-pooled',
         alpha=known.stats_alpha,
-        caption_note='(All panels pooled; each donor is one independent sample.)')
+        caption_note='(All panels pooled; repeated runs of one sample are merged, and '
+                     'each effective sample is one independent unit.)')
 
 
 def main(argv=None):
@@ -2931,14 +3076,16 @@ def main(argv=None):
                           'generate it first (the per-panel stats files are no longer '
                           'written)')
             return 1
-        print(F'\n% ==== pooled (all panels, donors as independent samples): {pooled_tsv} ====')
+        print(F'\n% ==== pooled (all panels, merged effective samples as independent '
+              F'units): {pooled_tsv} ====')
         return emit_latex_stats_table(
             pooled_tsv,
             reference=known.stats_reference,
             legend_kind='ploidy',
             table_label='tab:scwgs-ploidy-pairwise-pooled',
             alpha=known.stats_alpha,
-            caption_note='(All panels pooled; each donor is one independent sample.)')
+            caption_note='(All panels pooled; repeated runs of one sample are merged, '
+                         'and each effective sample is one independent unit.)')
     if known.stats_only:
         # [REV v4] iterate on the pooled tests without redrawing the figures.
         ran_stats = _run_ploidy_stats(known)

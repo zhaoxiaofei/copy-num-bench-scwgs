@@ -153,8 +153,10 @@ former is the reference-vs-rest pairwise table, the latter the
 ordering / unique-winner / top-2 step-down table; their rows carry exactly
 n, p, r and the 95% CI of r).  In every one of these tables each comparison
 reports, in this order and nothing else: the effective sample size $n$
-(donors; materials for the scRNA tables), the multiplicity-adjusted $p$, the
-effect size $r$ and the 95% CI of $r$.
+(independent units: donors for Fig. 2; donors, tumours and cell lines for the
+ploidy table after merging repeated runs of one sample; materials for the
+scRNA tables), the multiplicity-adjusted $p$, the effect size $r$ and the
+95% CI of $r$.
 
 ```
 # Run from the repository root; the paths below follow the layout of the sections above:
@@ -190,7 +192,12 @@ cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
 #     not applicable.  TN6 and TN7 were each sequenced at two read lengths (36 and
 #     152 bp), so the balloon figure keys an ACT row by sample x avgSpotLen and labels
 #     it "<sample> . <avgSpotLen> bp"; both runs stay visible instead of one of them
-#     silently standing in for the bare sample id.
+#     silently standing in for the bare sample id.  For the statistical tests the
+#     repeated runs of one sample are merged into ONE effective sample instead (TN6,
+#     TN7 and any other multi-avgSpotLen sample; likewise the three MDA-MB-231
+#     samples MDAMB231c28 / MDAMB231c8 / MDAMB231_popp31), because they are
+#     correlated observations of the same tumour / cell line rather than independent
+#     samples.
 python main.py --tumor-fastq --SraRunTable real_tumor/PRJNA629885_SraRunTable.csv_ref.tsv \
     --ploidy-file ploidy.PRJNA629885.tsv --ploidy-tools scabsolute --excluded-tools chisel \
     > real_tumor/PRJNA629885_SraRunTable_v02_with_scabsolute.snake
@@ -415,7 +422,17 @@ statistics and flagged naive comparisons:
   `donor -> cellLine -> dataset` defines the clusters -- germline-derived datasets of one
   donor share that donor's material; real-tumor samples (no donor metadata) are their own
   units.  Datasets with missing donor labels collapse into one shared `(missing)` cluster
-  (the conservative choice).
+  (the conservative choice).  Independently of that chain, every label is resolved through
+  the explicit `stat_tests.PLOIDY_SAMPLE_DATASETS` table (primary sample -> derived sample
+  names), which lists, e.g., the three MDA-MB-231 samples (`MDAMB231c28`, `MDAMB231c8`,
+  `MDAMB231_popp31` -- the same cell line) under one primary sample and the two
+  read-length runs of each TN tumour under that tumour.  Dataset identity is therefore a
+  table, not a name-format rule; a label not listed in the table is kept as its own unit
+  (and reported) instead of being silently merged.  The runs of a unit are aggregated to a
+  per-method median (non-failed rows preferred) BEFORE any test or effect-size computation,
+  so `n`, the signed ranks, the effect sizes and their bootstrap CIs refer to effective
+  samples, not sequencing runs; the runs stay separate descriptive rows in the balloon
+  figure.
 
 ### 7.2 Tests and outputs (all two-sided)
 
@@ -437,7 +454,13 @@ statistics and flagged naive comparisons:
   with a **cluster bootstrap 95% CI**
   (donors/clusters resampled with replacement, all cells of a drawn donor kept together;
   10,000 resamples requested by default, capped at 5,000 for runtime; seeded, so all
-  intervals are exactly reproducible).
+  intervals are exactly reproducible).  For the ploidy table the runs of one biological
+  sample are merged into a single effective sample FIRST (see the Fig. 3 bullet above), so
+  each merged sample contributes exactly one paired difference, one rank and one bootstrap
+  unit -- the effect sizes of the correlated runs are therefore merged (the merged sample's
+  median), not pooled as if the runs were independent; the per-comparison
+  `*.pooled.stats.json` records which runs entered which effective sample under
+  `"pooling": {"merged_units": ...}`.
 * **Diagnostics of the independence assumption, per comparison** (`*.stats.pairwise.tsv`):
   `icc_within_cluster_d` (ICC(1,1) of the paired differences within donor groups, one-way
   ANOVA method of moments), `design_effect` = 1 + (m0-1)*max(ICC, 0), `n_effective_cells` =
@@ -622,6 +645,12 @@ of evaluable cells and the percentage inside the ploidy window.  The ploidy figu
 keys an ACT row by `sample x avgSpotLen` and labels it `<sample> · <avgSpotLen> bp`, so the
 two runs remain distinguishable; the per-sample `n_cells_published` values in
 `ploidy.PRJNA629885.tsv` (TN6: 1378, TN7: 1393) are the sum of the two runs.
+The statistical tests instead resolve each label through
+`stat_tests.PLOIDY_SAMPLE_DATASETS` and merge the two runs (and the three MDA-MB-231
+samples `MDAMB231c28` / `MDAMB231c8` / `MDAMB231_popp31`, which are preparations of one
+cell line) into ONE effective sample each, aggregating their per-method values by median
+before any test or effect-size computation, because they are correlated observations of the
+same tumour / cell line rather than independent samples; see section 7.1.
 
 `--ploidy-facs` also measures what the estimate is worth downstream: the calls are converted
 into a Ginkgo FACS file and Ginkgo is re-run with them as `ginkgo_facs_<tool>`, which is
