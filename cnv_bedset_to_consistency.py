@@ -19,17 +19,23 @@
 #  [FIX 3] merge_bed_with_cn(): row[0]/row[1]/row[2] are integer keys on a label-indexed
 #          Series (deprecated; FutureWarning on pandas 2.x, hard KeyError on pandas 3.x).
 #          Now row.iloc[0]/iloc[1]/iloc[2].
-#  [FIX 4] bedset_to_consistency(): the four `bedtools intersect` outputs are aligned by
-#          their (chr, start, end) columns instead of being glued position-wise with
-#          pd.concat(axis=1).  Each intersect output follows the row order of its own -a
-#          file, and those -a files come from different pipeline steps (pre-sim call 1/2,
-#          simulated truth, post-sim call), so the same interval usually sits at a
-#          different row index in each file (measured on real chisel output: 626/733 rows
-#          at a different interval).  The old positional concat silently attached the
-#          truth and pre-sim CNs to the wrong intervals.  Intervals that are absent from
-#          any of the frames (a few bedtools zero-length/off-by-one artefacts) are dropped
-#          with a warning, a large mismatch (>5% of intervals) is an error, and the
-#          depth-based BED is aligned the same way instead of being zipped positionally.
+#  [FIX 4] bedset_to_consistency() now makes the narrowed BEDs row-aligned instead of
+#          repairing a positional concat after the fact.  Every input BED is sorted with
+#          `bedtools sort` (chromosome name lexicographic, start/end numeric).  A base
+#          covered by two or more intervals of the same BED is then resolved, and the
+#          result is written to a new BED (the input is never modified; no BED this script
+#          writes may overwrite an existing file):
+#            - if every covering interval has the same columns from the 4th onward, those
+#              intervals are merged into their union;
+#            - if those columns disagree, the shared base is ambiguous and is removed.
+#          int4 is the four-way intersect of the cleaned pre-sim, truth, and post-sim CN
+#          BEDs.  Each cleaned BED, including the optional depth BED, is then narrowed with
+#          `bedtools intersect -sorted -a <cleaned BED> -b int4`.  After this, every int4
+#          interval sits inside exactly one interval of each CN file, so row i of every
+#          narrowed CN BED is that same (chrom, start, end).  The script checks this and
+#          refuses to score if any CN row disagrees.  A depth BED that is finer than int4
+#          (or only partly covers it) is length-weighted onto the int4 intervals, again as
+#          a new BED, so its row i matches too.
 #  [FIX 5] The chained bedtools pipeline runs with `set -o pipefail`, so a failing
 #          intermediate command is no longer masked by the last command's exit code.
 #  [FIX 6] statsfile_to_avgdp(): returns None (rendered as JSON null) with a warning
@@ -57,7 +63,7 @@
 #          is written under both ground-truth scenarios); in the normal (diploid)
 #          simulations the mode is CN=2 unless the caller's ploidy estimate is off.
 
-import argparse, collections, functools, json, logging, math, os, subprocess, sys
+import argparse, collections, functools, json, logging, math, os, shlex, shutil, subprocess, sys, tempfile
 import numpy as np
 import pandas as pd
 #from functools import reduce
@@ -181,11 +187,313 @@ def modal_cn_fraction(cns, sizes):
 # [FIX 7] hg19 default; override with --n-ref-bases.
 N_REF_BASES = 3095677412
 
-# [FIX 4] The four `bedtools intersect` outputs are supposed to describe the same genomic
-# intervals; a few bedtools boundary artefacts per file are normal, but a large mismatch
-# means the inputs do not come from the same segmentation and the metrics would be
-# silently computed on a biased subset of the genome.
-MAX_UNMATCHED_INTERVAL_FRACTION = 0.05
+# [FIX 4] Self-overlap is what stops `bedtools intersect` from reproducing int4's coordinates.
+# Book-ended half-open intervals (start == previous end) are not overlaps.  Overlaps whose
+# columns from the 4th onward are identical are merged; overlaps whose columns disagree are
+# removed.  After that, the narrowed CN BEDs are required to be exactly row-aligned.
+def _bash(cmd):
+    logging.info('Executing: ' + cmd)
+    subprocess.run(cmd, shell=True, check=True, executable='/usr/bin/bash')
+
+def _is_header_line(line):
+    stripped = line.lstrip()
+    if not stripped:
+        return False
+    low = stripped.lower()
+    if stripped.startswith('#') or low.startswith('track') or low.startswith('browser'):
+        return True
+    tokens = stripped.split()
+    if len(tokens) < 3:
+        return True
+    try:
+        int(tokens[1]); int(tokens[2])
+    except ValueError:
+        return True
+    return False
+
+def _split_bed_header(src_path, body_path):
+    """Write data lines to body_path. Return the header line (with newline) or ''. """
+    with open(src_path) as src, open(body_path, 'w') as body:
+        first = src.readline()
+        if not first:
+            return ''
+        if _is_header_line(first):
+            shutil.copyfileobj(src, body)
+            return first if first.endswith('\n') else first + '\n'
+        body.write(first)
+        shutil.copyfileobj(src, body)
+        return ''
+
+def _normalize_header(header):
+    if not header:
+        return ''
+    return '\t'.join(header.rstrip('\n').split()) + '\n'
+
+def _bed_tokens(line):
+    tokens = line.rstrip('\n').split('\t')
+    if len(tokens) >= 3:
+        try:
+            int(tokens[1]); int(tokens[2])
+            return tokens
+        except ValueError:
+            pass
+    return line.split()
+
+def new_bed_path(preferred):
+    """A path that does not exist yet. Never returns a path that would truncate a BED."""
+    if not os.path.exists(preferred):
+        return preferred
+    base, ext = os.path.splitext(preferred)
+    n = 1
+    while True:
+        candidate = f'{base}.{n}{ext}'
+        if not os.path.exists(candidate):
+            logging.info(f'Not overwriting existing BED {preferred}; writing {candidate} instead. ')
+            return candidate
+        n += 1
+
+def _mkstemp_bed():
+    fd, path = tempfile.mkstemp(prefix='cnvbed_', suffix='.bed')
+    os.close(fd)
+    return path
+
+def sort_bed_with_bedtools(src_path, dst_path):
+    """Lexicographic chromosome order, numeric start, numeric end (`bedtools sort`)."""
+    body_path = _mkstemp_bed()
+    sorted_body_path = _mkstemp_bed()
+    try:
+        header = _normalize_header(_split_bed_header(src_path, body_path))
+        _bash(f'set -o pipefail; bedtools sort -i {shlex.quote(body_path)} > {shlex.quote(sorted_body_path)}')
+        with open(dst_path, 'x') as dst, open(sorted_body_path) as sorted_body:
+            if header:
+                dst.write(header)
+            shutil.copyfileobj(sorted_body, dst)
+    finally:
+        for path in (body_path, sorted_body_path):
+            if os.path.exists(path):
+                os.remove(path)
+    return header
+
+def read_bed_table(bed_path):
+    """Return (normalized header or '', list of token rows)."""
+    header = ''
+    rows = []
+    with open(bed_path) as handle:
+        first = True
+        for lineno, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            if first and _is_header_line(line):
+                header = _normalize_header(line)
+                first = False
+                continue
+            first = False
+            tokens = _bed_tokens(line)
+            if len(tokens) < 3:
+                raise ValueError(f'{bed_path}:{lineno}: fewer than 3 BED columns. ')
+            try:
+                int(tokens[1]); int(tokens[2])
+            except ValueError as exc:
+                raise ValueError(f'{bed_path}:{lineno}: start/end are not integers ({line.rstrip()!r}). ') from exc
+            rows.append(tokens)
+    return header, rows
+
+def iter_bed_intervals(bed_path):
+    for tokens in read_bed_table(bed_path)[1]:
+        yield 0, tokens[0], int(tokens[1]), int(tokens[2])
+
+def resolve_self_overlap_rows(rows):
+    """Merge same-annotation overlaps; drop bases covered by disagreeing annotations.
+
+    `rows` must already be in bedtools-sort order.  The annotation is every column from
+    the 4th onward, compared as text.  Book-ended intervals are not overlaps and are not
+    merged.  Zero-length intervals (end <= start) are dropped: bedtools rewrites [10, 10)
+    to [9, 11).  Returns (new_rows, merged_bases, ambiguous_bases, n_zero).
+    """
+    resolved = []
+    merged_bases = 0
+    ambiguous_bases = 0
+    n_zero = 0
+    i = 0
+    n = len(rows)
+    while i < n:
+        chrom = rows[i][0]
+        group = []
+        while i < n and rows[i][0] == chrom:
+            start, end = int(rows[i][1]), int(rows[i][2])
+            if end <= start:
+                n_zero += 1
+            else:
+                group.append((start, end, tuple(rows[i][3:])))
+            i += 1
+        events = []
+        for start, end, ann in group:
+            events.append((start, 1, ann))  # 1 = interval start, applied after the span
+            events.append((end, 0, ann))    # 0 = interval end, applied before a start at the same base
+        events.sort()
+        active = collections.Counter()
+        open_seg = None  # [chrom, start, end, ann]
+        prev = None
+        for pos, kind, ann in events:
+            if prev is not None and pos > prev:
+                covering = [a for a, count in active.items() if count > 0]
+                if len(covering) == 1:
+                    ann1 = covering[0]
+                    if open_seg is not None and open_seg[3] == ann1 and open_seg[2] == prev:
+                        open_seg[2] = pos
+                    else:
+                        if open_seg is not None:
+                            resolved.append(open_seg)
+                        open_seg = [chrom, prev, pos, ann1]
+                    if active[ann1] >= 2:
+                        merged_bases += pos - prev
+                else:
+                    if open_seg is not None:
+                        resolved.append(open_seg)
+                        open_seg = None
+                    if len(covering) >= 2:
+                        ambiguous_bases += pos - prev
+            if kind == 1:
+                active[ann] += 1
+            else:
+                active[ann] -= 1
+                if active[ann] <= 0:
+                    del active[ann]
+                if not active and open_seg is not None:
+                    resolved.append(open_seg)
+                    open_seg = None
+            prev = pos
+        if open_seg is not None:
+            resolved.append(open_seg)
+    new_rows = [[chrom, str(start), str(end), *ann] for chrom, start, end, ann in resolved]
+    _assert_rows_do_not_overlap(new_rows)
+    return new_rows, merged_bases, ambiguous_bases, n_zero
+
+def _assert_rows_do_not_overlap(rows):
+    max_end = None
+    chrom = None
+    for tokens in rows:
+        c, start, end = tokens[0], int(tokens[1]), int(tokens[2])
+        if chrom == c and start < max_end:
+            raise RuntimeError(f'Self-overlap remained after resolve: {c}:{start}-{end} under running end {max_end}. ')
+        if chrom != c or max_end is None or end > max_end:
+            chrom, max_end = c, end
+
+def write_resolved_bed(sorted_bed, preferred_out, label):
+    """Write a new BED if any overlap was merged or trimmed. Otherwise return sorted_bed."""
+    header, rows = read_bed_table(sorted_bed)
+    new_rows, merged_bases, ambiguous_bases, n_zero = resolve_self_overlap_rows(rows)
+    if merged_bases == 0 and ambiguous_bases == 0 and n_zero == 0:
+        logging.info(f'{label}: no self-overlap in {sorted_bed}. ')
+        return sorted_bed
+    out_path = new_bed_path(preferred_out)
+    with open(out_path, 'x') as out:
+        if header:
+            out.write(header if header.endswith('\n') else header + '\n')
+        for tokens in new_rows:
+            out.write('\t'.join(tokens) + '\n')
+    logging.warning(
+        f'{label}: wrote {out_path} without modifying {sorted_bed}. '
+        f'Merged {merged_bases} bp covered by overlapping intervals with identical columns from the 4th onward; '
+        f'removed {ambiguous_bases} bp where those columns disagreed; '
+        f'dropped {n_zero} zero-length interval(s). ')
+    return out_path
+
+def intersect_to_int4(pre1_bed, pre2_bed, truth_bed, post_bed, int4_bed):
+    """Four-way intersect. Output coordinates are post ∩ truth ∩ pre1 ∩ pre2, in sorted order."""
+    temps = []
+    try:
+        bodies = []
+        for src in (pre1_bed, pre2_bed, truth_bed, post_bed):
+            body = _mkstemp_bed()
+            temps.append(body)
+            _split_bed_header(src, body)
+            bodies.append(body)
+        _bash(
+            'set -o pipefail; '
+            f'bedtools intersect -sorted -a {shlex.quote(bodies[0])} -b {shlex.quote(bodies[1])} '
+            f'| bedtools intersect -sorted -a {shlex.quote(bodies[2])} -b - '
+            f'| bedtools intersect -sorted -a {shlex.quote(bodies[3])} -b - '
+            f'> {shlex.quote(int4_bed)}'
+        )
+    finally:
+        for path in temps:
+            if os.path.exists(path):
+                os.remove(path)
+
+def narrow_bed_to_int4(src_bed, int4_bed, dst_bed):
+    """Keep the header from src_bed. Data rows are src ∩ int4, in src order."""
+    body_path = _mkstemp_bed()
+    narrowed_path = _mkstemp_bed()
+    try:
+        header = _normalize_header(_split_bed_header(src_bed, body_path))
+        _bash(
+            'set -o pipefail; '
+            f'bedtools intersect -sorted -a {shlex.quote(body_path)} -b {shlex.quote(int4_bed)} '
+            f'> {shlex.quote(narrowed_path)}'
+        )
+        with open(dst_bed, 'x') as dst, open(narrowed_path) as narrowed:
+            if header:
+                dst.write(header)
+            shutil.copyfileobj(narrowed, dst)
+    finally:
+        for path in (body_path, narrowed_path):
+            if os.path.exists(path):
+                os.remove(path)
+
+def bed_interval_keys(bed_path):
+    return [(chrom, start, end) for _, chrom, start, end in iter_bed_intervals(bed_path)]
+
+def assert_rows_share_intervals(bed_paths, labels):
+    """Require row i of every file to be the same (chrom, start, end)."""
+    keys = [bed_interval_keys(path) for path in bed_paths]
+    reference = keys[0]
+    for label, path, got in zip(labels, bed_paths, keys):
+        if got == reference:
+            continue
+        n = min(len(reference), len(got))
+        mismatch_at = next((i for i in range(n) if reference[i] != got[i]), None)
+        if mismatch_at is None:
+            detail = f'length {len(got)} versus {len(reference)} in {labels[0]}'
+        else:
+            detail = (f'row {mismatch_at} is {got[mismatch_at][0]}:{got[mismatch_at][1]}-{got[mismatch_at][2]} '
+                      f'but {labels[0]} has {reference[mismatch_at][0]}:{reference[mismatch_at][1]}-{reference[mismatch_at][2]}')
+        raise ValueError(
+            f'Narrowed BED {label} ({path}) is not row-aligned with {labels[0]} ({bed_paths[0]}): {detail}. ')
+
+def project_obsdp_onto_reference(ref_keys, depth_keys_and_dp):
+    """Length-weighted obsDP of depth pieces onto each reference interval.
+
+    ref_keys and depth records are in bedtools-sort order and do not self-overlap.
+    Returns (obsDP list, covered-base list), one entry per reference interval.
+    """
+    obs = [np.nan] * len(ref_keys)
+    bases = [0] * len(ref_keys)
+    weighted = [0.0] * len(ref_keys)
+    j = 0
+    n_depth = len(depth_keys_and_dp)
+    for i, (rc, rs, re) in enumerate(ref_keys):
+        while j < n_depth:
+            dc, ds, de, _dp = depth_keys_and_dp[j]
+            if dc < rc or (dc == rc and de <= rs):
+                j += 1
+                continue
+            break
+        k = j
+        while k < n_depth:
+            dc, ds, de, dp = depth_keys_and_dp[k]
+            if dc != rc or ds >= re:
+                break
+            overlap = min(de, re) - max(ds, rs)
+            if overlap > 0 and dp is not None and math.isfinite(dp):
+                weighted[i] += dp * overlap
+                bases[i] += overlap
+            k += 1
+        if bases[i] > 0:
+            obs[i] = weighted[i] / float(bases[i])
+    return obs, bases
+
+
 
 def statsfile_to_avgdp(sim_bam_stats, n_ref_bases=N_REF_BASES):
     #SN      bases mapped (cigar):   568 526 831       # more accurate
@@ -366,71 +674,92 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         logging.warning(f'sim_bam_stats file not found: {sim_bam_stats}; average_seq_depth will be null. ')
         avgDP = None
 
-    post_sim_call_bed_multiinter = change_file_ext(post_sim_call_bed_int_fname, 'multiinter.bed',             'bed')
-    pre_sim_call_bed_1_inter     = change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_1.bed',    'bed')
-    pre_sim_call_bed_2_inter     = change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_2.bed',    'bed')
-    approx_truth_bed_inter       = change_file_ext(post_sim_call_bed_int_fname, 'intersect_approx_truth.bed', 'bed')
-    post_sim_call_bed_inter      = change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_CN.bed',  'bed')
-    post_sim_call_bed_by_DP_inter= change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_DP.bed',  'bed')
-    post_sim_call_bed_multiinter_cmd = (
-        # [FIX 5] `set -o pipefail` so that a failure of an intermediate bedtools command
-        # is not masked by the exit code of the last command in the pipeline.
-        F'''set -o pipefail; bedtools intersect -a {pre_sim_call_bed_1_fname} -b {pre_sim_call_bed_2_fname} '''
-        F'''| bedtools intersect -a {approx_truth_bed_fname} -b - | bedtools intersect -a {post_sim_call_bed_int_fname} -b - > {post_sim_call_bed_multiinter}'''
-    )
-    cmd1 = F''' bedtools intersect -header -a {pre_sim_call_bed_1_fname     } -b {post_sim_call_bed_multiinter} > {pre_sim_call_bed_1_inter} '''
-    cmd2 = F''' bedtools intersect -header -a {pre_sim_call_bed_2_fname     } -b {post_sim_call_bed_multiinter} > {pre_sim_call_bed_2_inter} '''
-    cmd3 = F''' bedtools intersect -header -a {approx_truth_bed_fname       } -b {post_sim_call_bed_multiinter} > {approx_truth_bed_inter  } '''
-    cmd4 = F''' bedtools intersect -header -a {post_sim_call_bed_int_fname  } -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_inter } '''
-    cmd5 = F''' bedtools intersect -header -a {post_sim_call_bed_dep_fname  } -b {post_sim_call_bed_multiinter} > {post_sim_call_bed_by_DP_inter} '''
-    if not post_sim_call_bed_dep_fname: cmd5 = F'printf "Skip generating {post_sim_call_bed_by_DP_inter}\\n"'
+    # [FIX 4] Sort every input, merge self-overlaps whose columns from the 4th onward
+    # agree, and drop bases whose covering intervals disagree.  Each result is a new BED.
+    # int4 is the four-way intersect of the cleaned CN BEDs.  Narrowing each cleaned BED
+    # with int4 then puts the same (chrom, start, end) on row i of every CN file.
+    def _prepare_bed(src_path, tag):
+        sorted_path = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, f'sorted_{tag}.bed', 'bed'))
+        sort_bed_with_bedtools(src_path, sorted_path)
+        resolved_path = change_file_ext(post_sim_call_bed_int_fname, f'resolved_{tag}.bed', 'bed')
+        return write_resolved_bed(sorted_path, resolved_path, tag)
 
-    for cmd in [post_sim_call_bed_multiinter_cmd, cmd1, cmd2, cmd3, cmd4, cmd5]:
-        logging.info('Executing: ' + cmd)
-        subprocess.run(cmd, shell=True, check=True, executable='/usr/bin/bash')
+    cleaned_pre1 = _prepare_bed(pre_sim_call_bed_1_fname, 'pre_sim_1')
+    cleaned_pre2 = _prepare_bed(pre_sim_call_bed_2_fname, 'pre_sim_2')
+    cleaned_truth = _prepare_bed(approx_truth_bed_fname, 'approx_truth')
+    cleaned_post = _prepare_bed(post_sim_call_bed_int_fname, 'post_sim_CN')
+    cleaned_dp = _prepare_bed(post_sim_call_bed_dep_fname, 'post_sim_DP') if post_sim_call_bed_dep_fname else ''
 
-    pre_sim_df_1_raw = pd.read_csv(pre_sim_call_bed_1_fname, sep='\t', header=0)
-    pre_sim_df_2_raw = pd.read_csv(pre_sim_call_bed_2_fname, sep='\t', header=0)
+    post_sim_call_bed_multiinter = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'multiinter.bed', 'bed'))
+    pre_sim_call_bed_1_inter     = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_1.bed', 'bed'))
+    pre_sim_call_bed_2_inter     = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_2.bed', 'bed'))
+    approx_truth_bed_inter       = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_approx_truth.bed', 'bed'))
+    post_sim_call_bed_inter      = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_CN.bed', 'bed'))
+    post_sim_call_bed_by_DP_inter = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_DP.bed', 'bed')) if cleaned_dp else ''
+
+    intersect_to_int4(cleaned_pre1, cleaned_pre2, cleaned_truth, cleaned_post, post_sim_call_bed_multiinter)   # [FIX 5] pipefail is inside intersect_to_int4
+    narrow_bed_to_int4(cleaned_pre1, post_sim_call_bed_multiinter, pre_sim_call_bed_1_inter)
+    narrow_bed_to_int4(cleaned_pre2, post_sim_call_bed_multiinter, pre_sim_call_bed_2_inter)
+    narrow_bed_to_int4(cleaned_truth, post_sim_call_bed_multiinter, approx_truth_bed_inter)
+    narrow_bed_to_int4(cleaned_post, post_sim_call_bed_multiinter, post_sim_call_bed_inter)
+    if cleaned_dp:
+        narrow_bed_to_int4(cleaned_dp, post_sim_call_bed_multiinter, post_sim_call_bed_by_DP_inter)
+
+    assert_rows_share_intervals(
+        [pre_sim_call_bed_1_inter, pre_sim_call_bed_2_inter, approx_truth_bed_inter, post_sim_call_bed_inter, post_sim_call_bed_multiinter],
+        ['pre-sim call 1', 'pre-sim call 2', 'approximate truth', 'post-sim CN', 'int4'])
+    logging.info(
+        f'{len(bed_interval_keys(post_sim_call_bed_multiinter))} shared intervals; '
+        'row i of the narrowed pre-sim, truth, post-sim, and int4 BEDs is the same genomic interval. ')
+
+    pre_sim_df_1_raw = pd.read_csv(cleaned_pre1, sep='\t', header=0)
+    pre_sim_df_2_raw = pd.read_csv(cleaned_pre2, sep='\t', header=0)
 
     obsCN_to_genome_size_1 = pre_sim_df_to_obsCN_to_genome_size(pre_sim_df_1_raw, start_colname, end_colname)
     obsCN_to_genome_size_2 = pre_sim_df_to_obsCN_to_genome_size(pre_sim_df_2_raw, start_colname, end_colname)
 
     pre_sim_df_1     = pd.read_csv(pre_sim_call_bed_1_inter, sep='\t', header=0)
     pre_sim_df_2     = pd.read_csv(pre_sim_call_bed_2_inter, sep='\t', header=0)
-
     approx_truth_df  = pd.read_csv(approx_truth_bed_inter  , sep='\t', header=0)
     post_sim_call_df = pd.read_csv(post_sim_call_bed_inter , sep='\t', header=0)
 
-    # [FIX 4] The four intersect outputs are NOT necessarily row-aligned: each output follows
-    # the row order of its own -a file, and those -a files come from different pipeline steps
-    # (pre-sim call 1/2, simulated truth, post-sim call), so the same genomic interval can sit
-    # at a different row index in each file.  Gluing them with pd.concat(axis=1) therefore
-    # attached the truth/pre-sim CNs of one interval to another interval, silently corrupting
-    # the expected CN and every metric derived from it.  Align the frames by their interval
-    # columns instead; the intervals that are absent from any frame are the bedtools
-    # zero-length/off-by-one overlap artefacts, dropped here and reported.
-    interval_cols = [chrom_colname, start_colname, end_colname]
-    n_post_intervals = len(post_sim_call_df)
-    merged_df = post_sim_call_df.merge(
-        pre_sim_df_1[interval_cols + ['obsCN']], on=interval_cols, how='inner',
-        validate='one_to_one', suffixes=('', '_pre1'))
-    merged_df = merged_df.merge(
-        pre_sim_df_2[interval_cols + ['obsCN']], on=interval_cols, how='inner',
-        validate='one_to_one', suffixes=('', '_pre2'))
-    merged_df = merged_df.merge(
-        approx_truth_df[interval_cols + ['majorCN', 'minorCN']], on=interval_cols,
-        how='inner', validate='one_to_one')
-    n_unmatched = n_post_intervals - len(merged_df)
-    if n_unmatched:
-        logging.warning(
-            F'{n_unmatched}/{n_post_intervals} interval(s) of {post_sim_call_bed_int_fname} are not '
-            'present in all four intersect files (bedtools boundary artefacts); they are excluded '
-            'from all metrics. ')
-    if len(merged_df) < (1.0 - MAX_UNMATCHED_INTERVAL_FRACTION) * n_post_intervals:
-        raise ValueError(
-            F'{n_unmatched}/{n_post_intervals} interval(s) of {post_sim_call_bed_int_fname} failed to align '
-            'with the pre-sim/truth intersect files: the inputs do not describe the same genomic '
-            'segmentation, so the consistency metrics would be computed on a biased subset. ')
+    merged_df = post_sim_call_df.reset_index(drop=True)
+    merged_df['obsCN_pre1'] = pre_sim_df_1['obsCN'].to_numpy()
+    merged_df['obsCN_pre2'] = pre_sim_df_2['obsCN'].to_numpy()
+    merged_df['majorCN'] = approx_truth_df['majorCN'].to_numpy()
+    merged_df['minorCN'] = approx_truth_df['minorCN'].to_numpy()
+
+    depth_obs = None
+    depth_bases = None
+    if cleaned_dp:
+        dp_header, dp_rows = read_bed_table(post_sim_call_bed_by_DP_inter)
+        dp_cols = dp_header.rstrip('\n').split('\t') if dp_header else []
+        if 'obsDP' not in dp_cols:
+            raise ValueError(f'{post_sim_call_bed_by_DP_inter} has no obsDP column (header={dp_cols!r}). ')
+        dp_idx = dp_cols.index('obsDP')
+        int4_keys = bed_interval_keys(post_sim_call_bed_multiinter)
+        narrowed_keys = [(tokens[0], int(tokens[1]), int(tokens[2])) for tokens in dp_rows]
+        if narrowed_keys == int4_keys:
+            depth_obs = np.array([float(tokens[dp_idx]) for tokens in dp_rows], dtype=float)
+            depth_bases = np.array([int(tokens[2]) - int(tokens[1]) for tokens in dp_rows], dtype=int)
+            logging.info('Depth BED rows match int4; row i is the same genomic interval. ')
+        else:
+            records = [(tokens[0], int(tokens[1]), int(tokens[2]), float(tokens[dp_idx])) for tokens in dp_rows]
+            obs_list, base_list = project_obsdp_onto_reference(int4_keys, records)
+            depth_obs = np.array(obs_list, dtype=float)
+            depth_bases = np.array(base_list, dtype=int)
+            aligned_dp = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_DP.aligned.bed', 'bed'))
+            with open(aligned_dp, 'x') as aligned:
+                aligned.write(dp_header if dp_header.endswith('\n') else dp_header + '\n')
+                for (chrom, start, end), dp in zip(int4_keys, obs_list):
+                    fields = ['.'] * len(dp_cols)
+                    fields[0], fields[1], fields[2] = chrom, str(start), str(end)
+                    fields[dp_idx] = 'nan' if not (isinstance(dp, float) and math.isfinite(dp)) else format(dp, '.12g')
+                    aligned.write('\t'.join(fields) + '\n')
+            logging.warning(
+                f'Depth BED {post_sim_call_bed_by_DP_inter} was not row-aligned with int4 after intersect; '
+                f'length-weighted obsDP was written to the new file {aligned_dp} so row i matches the CN BEDs. ')
+            post_sim_call_bed_by_DP_inter = aligned_dp
 
     merged_interval_size = merged_df[end_colname] - merged_df[start_colname]
     merged_df['expMajorCN'] = merged_df['obsCN_pre1'] * merged_df['majorCN']
@@ -465,24 +794,11 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
             obsCN, expCN = min((8, obsCN)), min((8, expCN))
             confusion_matrix_int[obsCN][expCN] += int(genomesize)
         genome_size, accuracy = cmat_to_genome_size_and_accuracy(confusion_matrix_int)
-        if post_sim_call_bed_dep_fname:
-            post_sim_call_df_by_DP = pd.read_csv(post_sim_call_bed_by_DP_inter, sep='\t', header=0)
-            # [FIX 4] Align the depth BED by interval as well; zipping it positionally would
-            # silently pair depths with the wrong intervals if its row order differs, and an
-            # equal row count alone does not prove alignment.
-            dp_merged_df = merged_df[interval_cols + [expCN_colname]].merge(
-                post_sim_call_df_by_DP[interval_cols + ['obsDP']], on=interval_cols,
-                how='inner', validate='one_to_one')
-            n_dp_unmatched = len(merged_df) - len(dp_merged_df)
-            if n_dp_unmatched:
-                logging.warning(
-                    F'{n_dp_unmatched}/{len(merged_df)} interval(s) of {post_sim_call_bed_dep_fname} do not '
-                    'align with the CN intervals; the depth-based PCC excludes them. ')
-            dp_interval_size = dp_merged_df[end_colname] - dp_merged_df[start_colname]
-            xyw = list(zip(dp_merged_df['obsDP'], dp_merged_df[expCN_colname], dp_interval_size))
-            if xyw:
-                x, y, w = zip(*xyw)
-                w_lin_corr_coef_byDP = weighted_lin_corr_coef(x, y, w)
+        if depth_obs is not None:
+            exp_vals = merged_df[expCN_colname].to_numpy(dtype=float)
+            mask = (depth_bases > 0) & np.isfinite(depth_obs) & np.isfinite(exp_vals)
+            if mask.any():
+                w_lin_corr_coef_byDP = weighted_lin_corr_coef(depth_obs[mask], exp_vals[mask], depth_bases[mask])
             else:
                 w_lin_corr_coef_byDP = np.nan
         else:
@@ -594,3 +910,4 @@ def main():
             args.chrom, args.start, args.end, n_ref_bases=args.n_ref_bases, bp_window=args.bp_window)
 
 if __name__ == '__main__': main()
+
