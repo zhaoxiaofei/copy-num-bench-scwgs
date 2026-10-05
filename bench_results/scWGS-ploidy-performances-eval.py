@@ -28,7 +28,8 @@ Four balloon / dot-grid figures, one per biological group:
 
 In every figure:
 
-    rows     = datasets
+    rows     = datasets (for ACT, one row per sample AND read length, so a
+               sample sequenced at two read lengths contributes two rows)
     columns  = methods  (each CNV caller contributes TWO columns:
                          copy-number cap at 10, and no cap)
     entry    = a filled circle whose SIZE and COLOR encode the percentage
@@ -87,9 +88,15 @@ The three cell-lines are split across three figures, so the row label inside
 each figure is ``<donor> - <sampleType> - <avgSpotLen> bp``.
 
 Real cancer-derived (ACT): a dataset is the original sample name (TN1, TN2,
-... and the ACT cell-line samples).  There is a single ACT figure; one
-ploidy-eval summary that covers many samples is split on the per-cell
-``sample`` column.
+... and the ACT cell-line samples) TOGETHER WITH the average spot length
+(read length) of its sequencing run, and the row label is
+``<sample> · <avgSpotLen> bp``.  This matters because TN6 and TN7 were each
+sequenced at two read lengths (36 bp and 152 bp): a bare sample id is
+ambiguous, since the two runs differ in both the number of evaluable cells
+(TN6: 173 cells at 152 bp vs 1205 at 36 bp; TN7: 486 vs 907) and the
+percentage of cells inside the ploidy window.  Each run is therefore drawn as
+its own row.  There is a single ACT figure; one ploidy-eval summary that
+covers many samples is split on the per-cell ``sample`` column.
 
 Input
 -----
@@ -705,6 +712,24 @@ def germline_row_label(run):
     return ' · '.join(parts) if parts else (run['stem_label'] or 'dataset')
 
 
+def act_row_label(sample, avg_spot_len):
+    """Row label inside the ACT figure: ``<sample> · <avgSpotLen> bp``.
+
+    TN6 and TN7 were each sequenced at two read lengths, so a bare sample id
+    is ambiguous: the same id carries two different evaluable-cell counts
+    (TN6: 173 cells at 152 bp vs 1205 cells at 36 bp; TN7: 486 vs 907) and
+    two different in-window percentages.  Carrying the read length in the
+    label gives every run its own row -- the row identity then matches the
+    ``dataset x avgSpotLen`` key of the long table and the figure cannot be
+    read as a single run per sample.
+    """
+    s = '' if sample is None else str(sample).strip()
+    spot = '' if avg_spot_len is None else str(avg_spot_len).strip()
+    if spot and spot.lower() not in ('none', 'nan', 'nat', 'null'):
+        return F"{s} · {spot} bp" if s else F"{spot} bp"
+    return s
+
+
 def _pct_within(err, window, is_outlier=None):
     """Percentage of finite cells inside the ploidy window.  NaN if none are finite."""
     err = np.asarray(err, dtype=float)
@@ -828,19 +853,21 @@ def expand_runs_to_entries(runs, window_override=None):
                     window, failed=run['failed']))
             continue
 
-        # ACT / real cancer: one row per original sample name.
+        # ACT / real cancer: one row per original sample name AND read length.
+        # TN6/TN7 were each sequenced at two read lengths, so their labels carry
+        # the avgSpotLen and the two runs stay separate rows.
         if samples:
             for sample in samples:
                 mask = mask_of(sample)
                 entries.append(_entry(
-                    'ACT', canon_act_sample(sample), run,
+                    'ACT', act_row_label(canon_act_sample(sample), run.get('avgSpotLen')), run,
                     run['ploidy_error'][mask], int(mask.sum()), outlier_of(mask),
                     window, failed=run['failed']))
         else:
-            # no sample column values: one ACT row labelled by donor
+            # no sample column values: one ACT row labelled by donor (+ read length)
             label = run['donor'] or run['stem_label'] or 'ACT'
             entries.append(_entry(
-                'ACT', canon_act_sample(label), run,
+                'ACT', act_row_label(canon_act_sample(label), run.get('avgSpotLen')), run,
                 run['ploidy_error'], run['n_cells'], run['is_outlier'],
                 window, failed=run['failed']))
     return pd.DataFrame(entries)
@@ -881,17 +908,41 @@ def order_germline_rows(sub):
     return rows
 
 
+_ACT_LABEL_SPOT_RE = re.compile(r'·\s*(\d+(?:\.\d+)?)\s*bp\s*$', re.I)
+
+
+def _act_base_sample(label):
+    """Bare ACT sample id from a row label ``<sample> · <avgSpotLen> bp``."""
+    s = str(label or '').strip()
+    for sep in ('·', '•'):
+        if sep in s:
+            head = s.split(sep, 1)[0].strip()
+            return head or s
+    return s
+
+
+def _act_label_spot(label):
+    """avgSpotLen token from a row label ``<sample> · <avgSpotLen> bp`` (or '')."""
+    m = _ACT_LABEL_SPOT_RE.search(str(label or ''))
+    return m.group(1) if m else ''
+
+
 def order_act_rows(sub):
+    """Stable ACT order: sample (ACT_SAMPLE_ORDER, then TN number, then name),
+    and within one sample by read length (avgSpotLen).  The read-length key is
+    what keeps the two TN6/TN7 runs adjacent and in a deterministic order."""
     names = [d for d in sub['dataset'].dropna().unique() if d]
     rank = {n: i for i, n in enumerate(ACT_SAMPLE_ORDER)}
 
     def key(n):
-        if n in rank:
-            return (0, rank[n], n)
-        m = re.match(r'^TN(\d+)$', str(n), re.I)
+        base = _act_base_sample(n)
+        spot = _act_label_spot(n)
+        if base in rank:
+            return (0, rank[base], _spot_sort_key(spot), str(n))
+        m = re.match(r'^TN(\d+)$', base, re.I)
         if m:
-            return (0, 1000 + int(m.group(1)), n)
-        return (1, 0, str(n).lower())
+            return (0, 1000 + int(m.group(1)), _spot_sort_key(spot), str(n))
+        return (1, 0, _spot_sort_key(spot), str(n).lower())
 
     return sorted(names, key=key)
 
@@ -948,6 +999,9 @@ def make_demo_runs(rng=None):
     cell_lines = GERMLINE_CELL_LINE_ORDER
     act_samples = ['TN1', 'TN2', 'TN3', 'TN4', 'TN5', 'TN6', 'TN7', 'TN8',
                    'mb157', 'BT20', 'mb453']
+    # TN6/TN7 have no 50 bp run in the real ACT arm: they are covered by the
+    # extra 36/152 bp runs added below, exactly like the real input summaries.
+    act_main_samples = [s for s in act_samples if s not in ('TN6', 'TN7')]
 
     # Combinations that should appear as red crosses (runtime failures).
     missing = {
@@ -1007,7 +1061,15 @@ def make_demo_runs(rng=None):
         for cap, acc_delta in ((10.0, 0.02), (float('inf'), -0.08)):
             acc = min(0.97, max(0.10, acc0 + acc_delta))
             runs.append(_one(tool, 'ACT', 'tumor', '50', '', cap,
-                             samples=act_samples, acc=acc, tag='ACT'))
+                             samples=act_main_samples, acc=acc, tag='ACT'))
+        # TN6/TN7 were each sequenced at two read lengths in the real ACT arm.
+        # The demo carries those extra runs so the read-length-qualified ACT
+        # rows (and not just the 50 bp rows) are exercised end to end.
+        for spot in ('36', '152'):
+            for cap, acc_delta in ((10.0, 0.02), (float('inf'), -0.08)):
+                acc = min(0.97, max(0.10, acc0 + acc_delta))
+                runs.append(_one(tool, 'ACT', 'tumor', spot, '', cap,
+                                 samples=['TN6', 'TN7'], acc=acc, tag='ACT'))
     return runs
 
 
@@ -1608,7 +1670,33 @@ def _build_payload(entries, plot_id, row_labels, raw_col_pairs):
     for rec in sub.itertuples(index=False):
         if rec.dataset is None or (isinstance(rec.dataset, float) and np.isnan(rec.dataset)):
             continue
-        lookup[(rec.dataset, rec.tool, rec.max_cn)] = rec
+        key = (rec.dataset, rec.tool, rec.max_cn)
+        prev = lookup.get(key)
+        if prev is None:
+            lookup[key] = rec
+            continue
+        # Never silently let the last-loaded run win.  ACT row labels carry the
+        # read length, so this only triggers on genuinely ambiguous input: two
+        # runs of the same dataset AND read length, or a run without a read
+        # length colliding with a labelled one.  Keep the run with more
+        # evaluable cells (the more informative evaluation) and say so.
+        prev_n = getattr(prev, COUNT_FIELD, np.nan)
+        new_n = getattr(rec, COUNT_FIELD, np.nan)
+        try:
+            keep_new = float(new_n) > float(prev_n)
+        except (TypeError, ValueError):
+            keep_new = False
+        logging.warning(
+            'payload: two evaluations match (dataset=%r, tool=%r, max_cn=%r): '
+            'avgSpotLen=%r (n_cells_finite=%s) and avgSpotLen=%r '
+            '(n_cells_finite=%s); keeping the %s.  Give every run a distinct '
+            'row label or de-duplicate the input summaries.',
+            rec.dataset, rec.tool, fmt_max_cn(rec.max_cn),
+            getattr(prev, 'avgSpotLen', ''), prev_n,
+            getattr(rec, 'avgSpotLen', ''), new_n,
+            'newer, more evaluable row' if keep_new else 'first row')
+        if keep_new:
+            lookup[key] = rec
 
     nr, nc = len(row_labels), len(colspecs)
     pct = np.full((nr, nc), np.nan, dtype=float)
@@ -2372,9 +2460,10 @@ def _donor_from_dataset_label(label, split=True):
     deliberately omitted, so identical labels appear in the three cell-line
     panels); with ``split=True`` the donor is therefore the first
     middle-dot-separated segment, which pools the sample-type / read-length
-    variants of the same donor.  Labels without a middle dot (e.g. the ACT
-    sample labels) are returned unchanged, i.e. each such dataset is treated
-    as its own donor unless a donor column is available.  With
+    variants of the same donor (ACT labels are ``<sample> · <avgSpotLen> bp``,
+    so the parsed donor is the sample id itself).  Labels without a middle dot
+    (e.g. a bare sample id) are returned unchanged, i.e. each such dataset is
+    treated as its own donor unless a donor column is available.  With
     ``split=False`` the full label is the unit (naive per-dataset mode).
     """
     s = str(label).strip()

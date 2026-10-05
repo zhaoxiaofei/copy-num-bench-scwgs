@@ -187,7 +187,10 @@ cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
 # ---- step 2: real-tumor arms -------------------------------------------------------
 # (a) ACT breast cancers: right panel of Fig. 3.  CHISEL is excluded because it needs
 #     phased genotypes, which the ACT samples lack; the Fig. 3 ACT panel shows it as
-#     not applicable.
+#     not applicable.  TN6 and TN7 were each sequenced at two read lengths (36 and
+#     152 bp), so the balloon figure keys an ACT row by sample x avgSpotLen and labels
+#     it "<sample> . <avgSpotLen> bp"; both runs stay visible instead of one of them
+#     silently standing in for the bare sample id.
 python main.py --tumor-fastq --SraRunTable real_tumor/PRJNA629885_SraRunTable.csv_ref.tsv \
     --ploidy-file ploidy.PRJNA629885.tsv --ploidy-tools scabsolute --excluded-tools chisel \
     > real_tumor/PRJNA629885_SraRunTable_v02_with_scabsolute.snake
@@ -361,6 +364,7 @@ cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | python bench_results/stat_tests.p
     -o ${BENCHMARK_RESULT_FILE_PREFIX}.stats.fine --reference ginkgo \
     --cluster-key accession_1,accession_2,cellLine                 # finer sensitivity analysis
 python bench_results/test_stat_tests.py                            # self-test + independence demo
+python bench_results/test_ploidy_act_rows.py                       # ACT row = sample x read length
 
 # Fig. 3 (ploidy benchmark): statistics on the balloon-plot table
 python bench_results/scWGS-ploidy-performances-eval.py -i '*_ploidy_*eval_summary.json' \
@@ -546,7 +550,9 @@ to the figure itself, so the source data and the figures can never drift apart:
   `--no-source-data` opts out.
 * **Fig. 3**: `<output>_pct_within_long.tsv` -- one row per (panel, dataset, tool, cap):
   `pct_within` (balloon diameter), `n_cells_finite` (balloon color), the expected ploidy
-  (`expected_ploidy_mean`) and the donor metadata.
+  (`expected_ploidy_mean`) and the donor metadata.  An ACT `dataset` label carries the
+  read length (`<sample> · <avgSpotLen> bp`): TN6 and TN7 were each sequenced at two read
+  lengths, so each run is its own row and a bare sample id is never used to join them.
 * **Fig. 4** and SI S23-S30: `cnv_clustermap.py` writes
   `<prefix>.heatmap_source_data.tsv.gz` (the exact matrix handed to the clustermap, rows =
   cells in dendrogram leaf order, columns = genomic bins, missing CN filled with the display
@@ -609,6 +615,13 @@ That per-sample estimate is what a caller gains by being named in `--ploidy-tool
 `*_ploidy_eval_*` files that `--ploidy-file` produces for it anyway are per-cell only.
 `--ploidy-facs` stays scAbsolute-only, since re-running Ginkgo with a ploidy that Ginkgo
 itself implied would be circular.
+
+The ACT arm is the one cohort where a sample can occur at more than one read length: TN6
+and TN7 were each sequenced at 36 bp and 152 bp, and the two runs differ in both the number
+of evaluable cells and the percentage inside the ploidy window.  The ploidy figure therefore
+keys an ACT row by `sample x avgSpotLen` and labels it `<sample> · <avgSpotLen> bp`, so the
+two runs remain distinguishable; the per-sample `n_cells_published` values in
+`ploidy.PRJNA629885.tsv` (TN6: 1378, TN7: 1393) are the sum of the two runs.
 
 `--ploidy-facs` also measures what the estimate is worth downstream: the calls are converted
 into a Ginkgo FACS file and Ginkgo is re-run with them as `ginkgo_facs_<tool>`, which is
