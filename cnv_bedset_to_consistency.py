@@ -23,8 +23,11 @@
 #          repairing a positional concat after the fact.  Every input BED is sorted with
 #          `bedtools sort` (chromosome name lexicographic, start/end numeric).  A base
 #          covered by two or more intervals of the same BED is then resolved, and the
-#          result is written to a new BED (the input is never modified; no BED this script
-#          writes may overwrite an existing file):
+#          result is written to a new BED inside a per-cell
+#          `cnvbed_intermediates/<post-sim-CN-BED-stem>/` subdirectory (the inputs are
+#          never modified; only files inside that subdirectory are rewritten, so reruns
+#          leave exactly one set of intermediates instead of accumulating .1/.2/...
+#          copies):
 #            - if every covering interval has the same columns from the 4th onward, those
 #              intervals are merged into their union;
 #            - if those columns disagree, the shared base is ambiguous and is removed.
@@ -33,9 +36,10 @@
 #          `bedtools intersect -sorted -a <cleaned BED> -b int4`.  After this, every int4
 #          interval sits inside exactly one interval of each CN file, so row i of every
 #          narrowed CN BED is that same (chrom, start, end).  The script checks this and
-#          refuses to score if any CN row disagrees.  A depth BED that is finer than int4
-#          (or only partly covers it) is length-weighted onto the int4 intervals, again as
-#          a new BED, so its row i matches too.
+#          refuses to score if any CN row disagrees or if the four-way intersection is
+#          empty.  A depth BED that is finer than int4 (or only partly covers it) is
+#          length-weighted onto the int4 intervals, again as a new BED, so its row i
+#          matches too.
 #  [FIX 5] The chained bedtools pipeline runs with `set -o pipefail`, so a failing
 #          intermediate command is no longer masked by the last command's exit code.
 #  [FIX 6] statsfile_to_avgdp(): returns None (rendered as JSON null) with a warning
@@ -63,7 +67,7 @@
 #          is written under both ground-truth scenarios); in the normal (diploid)
 #          simulations the mode is CN=2 unless the caller's ploidy estimate is off.
 
-import argparse, collections, functools, json, logging, math, os, shlex, shutil, subprocess, sys, tempfile
+import argparse, collections, json, logging, math, os, shlex, shutil, subprocess, tempfile
 import numpy as np
 import pandas as pd
 #from functools import reduce
@@ -239,32 +243,23 @@ def _bed_tokens(line):
             pass
     return line.split()
 
-def new_bed_path(preferred):
-    """A path that does not exist yet. Never returns a path that would truncate a BED."""
-    if not os.path.exists(preferred):
-        return preferred
-    base, ext = os.path.splitext(preferred)
-    n = 1
-    while True:
-        candidate = f'{base}.{n}{ext}'
-        if not os.path.exists(candidate):
-            logging.info(f'Not overwriting existing BED {preferred}; writing {candidate} instead. ')
-            return candidate
-        n += 1
-
 def _mkstemp_bed():
     fd, path = tempfile.mkstemp(prefix='cnvbed_', suffix='.bed')
     os.close(fd)
     return path
 
 def sort_bed_with_bedtools(src_path, dst_path):
-    """Lexicographic chromosome order, numeric start, numeric end (`bedtools sort`)."""
+    """Lexicographic chromosome order, numeric start, numeric end (`bedtools sort`).
+
+    `dst_path` lives in the per-cell cnvbed_intermediates directory and is rewritten
+    on reruns; the source BED is only read.
+    """
     body_path = _mkstemp_bed()
     sorted_body_path = _mkstemp_bed()
     try:
         header = _normalize_header(_split_bed_header(src_path, body_path))
         _bash(f'set -o pipefail; bedtools sort -i {shlex.quote(body_path)} > {shlex.quote(sorted_body_path)}')
-        with open(dst_path, 'x') as dst, open(sorted_body_path) as sorted_body:
+        with open(dst_path, 'w') as dst, open(sorted_body_path) as sorted_body:
             if header:
                 dst.write(header)
             shutil.copyfileobj(sorted_body, dst)
@@ -386,17 +381,21 @@ def write_resolved_bed(sorted_bed, preferred_out, label):
     if merged_bases == 0 and ambiguous_bases == 0 and n_zero == 0:
         logging.info(f'{label}: no self-overlap in {sorted_bed}. ')
         return sorted_bed
-    out_path = new_bed_path(preferred_out)
-    with open(out_path, 'x') as out:
+    out_path = preferred_out
+    with open(out_path, 'w') as out:
         if header:
             out.write(header if header.endswith('\n') else header + '\n')
         for tokens in new_rows:
             out.write('\t'.join(tokens) + '\n')
-    logging.warning(
+    message = (
         f'{label}: wrote {out_path} without modifying {sorted_bed}. '
         f'Merged {merged_bases} bp covered by overlapping intervals with identical columns from the 4th onward; '
         f'removed {ambiguous_bases} bp where those columns disagreed; '
         f'dropped {n_zero} zero-length interval(s). ')
+    if merged_bases or ambiguous_bases:
+        logging.warning(message)
+    else:
+        logging.info(message)
     return out_path
 
 def intersect_to_int4(pre1_bed, pre2_bed, truth_bed, post_bed, int4_bed):
@@ -432,7 +431,7 @@ def narrow_bed_to_int4(src_bed, int4_bed, dst_bed):
             f'bedtools intersect -sorted -a {shlex.quote(body_path)} -b {shlex.quote(int4_bed)} '
             f'> {shlex.quote(narrowed_path)}'
         )
-        with open(dst_bed, 'x') as dst, open(narrowed_path) as narrowed:
+        with open(dst_bed, 'w') as dst, open(narrowed_path) as narrowed:
             if header:
                 dst.write(header)
             shutil.copyfileobj(narrowed, dst)
@@ -678,10 +677,25 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     # agree, and drop bases whose covering intervals disagree.  Each result is a new BED.
     # int4 is the four-way intersect of the cleaned CN BEDs.  Narrowing each cleaned BED
     # with int4 then puts the same (chrom, start, end) on row i of every CN file.
+    # [FIX 4] All derived BEDs live in one per-cell subdirectory next to the post-sim
+    # CN BED: <datadir>/cnvbed_intermediates/<post-bed-stem>/.  Fixed names inside that
+    # directory are rewritten on reruns, so exactly one set of intermediates per cell
+    # remains (no .1/.2/... accumulation) and the input BEDs are never modified.
+    intermediates_dir = os.path.join(
+        os.path.dirname(os.path.abspath(post_sim_call_bed_int_fname)),
+        'cnvbed_intermediates',
+        os.path.splitext(os.path.basename(post_sim_call_bed_int_fname))[0])
+    os.makedirs(intermediates_dir, exist_ok=True)
+
+    def _intermediate(name):
+        return os.path.join(intermediates_dir, name)
+
     def _prepare_bed(src_path, tag):
-        sorted_path = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, f'sorted_{tag}.bed', 'bed'))
+        sorted_path = _intermediate(f'sorted_{tag}.bed')
         sort_bed_with_bedtools(src_path, sorted_path)
-        resolved_path = change_file_ext(post_sim_call_bed_int_fname, f'resolved_{tag}.bed', 'bed')
+        resolved_path = _intermediate(f'resolved_{tag}.bed')
+        if os.path.exists(resolved_path):
+            os.remove(resolved_path)   # stale resolved BED from an earlier run
         return write_resolved_bed(sorted_path, resolved_path, tag)
 
     cleaned_pre1 = _prepare_bed(pre_sim_call_bed_1_fname, 'pre_sim_1')
@@ -690,14 +704,24 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
     cleaned_post = _prepare_bed(post_sim_call_bed_int_fname, 'post_sim_CN')
     cleaned_dp = _prepare_bed(post_sim_call_bed_dep_fname, 'post_sim_DP') if post_sim_call_bed_dep_fname else ''
 
-    post_sim_call_bed_multiinter = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'multiinter.bed', 'bed'))
-    pre_sim_call_bed_1_inter     = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_1.bed', 'bed'))
-    pre_sim_call_bed_2_inter     = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_pre_sim_2.bed', 'bed'))
-    approx_truth_bed_inter       = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_approx_truth.bed', 'bed'))
-    post_sim_call_bed_inter      = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_CN.bed', 'bed'))
-    post_sim_call_bed_by_DP_inter = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_DP.bed', 'bed')) if cleaned_dp else ''
+    post_sim_call_bed_multiinter  = _intermediate('multiinter.bed')
+    pre_sim_call_bed_1_inter      = _intermediate('intersect_pre_sim_1.bed')
+    pre_sim_call_bed_2_inter      = _intermediate('intersect_pre_sim_2.bed')
+    approx_truth_bed_inter        = _intermediate('intersect_approx_truth.bed')
+    post_sim_call_bed_inter       = _intermediate('intersect_post_sim_CN.bed')
+    post_sim_call_bed_by_DP_inter = _intermediate('intersect_post_sim_DP.bed') if cleaned_dp else ''
 
     intersect_to_int4(cleaned_pre1, cleaned_pre2, cleaned_truth, cleaned_post, post_sim_call_bed_multiinter)   # [FIX 5] pipefail is inside intersect_to_int4
+    # [FIX 4] Never score an empty shared segmentation: the old alignment failed on it
+    # (bedtools writes a 0-byte intersect, so pandas raised), and an all-NaN perf.json
+    # would otherwise enter the benchmark silently.
+    int4_keys = bed_interval_keys(post_sim_call_bed_multiinter)
+    if not int4_keys:
+        raise ValueError(
+            f'Empty four-way intersection for {post_sim_call_bed_int_fname}: '
+            f'{pre_sim_call_bed_1_fname}, {pre_sim_call_bed_2_fname}, '
+            f'{approx_truth_bed_fname} and the post-sim CN BED share no genomic interval; refusing to score. ')
+
     narrow_bed_to_int4(cleaned_pre1, post_sim_call_bed_multiinter, pre_sim_call_bed_1_inter)
     narrow_bed_to_int4(cleaned_pre2, post_sim_call_bed_multiinter, pre_sim_call_bed_2_inter)
     narrow_bed_to_int4(cleaned_truth, post_sim_call_bed_multiinter, approx_truth_bed_inter)
@@ -709,7 +733,7 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         [pre_sim_call_bed_1_inter, pre_sim_call_bed_2_inter, approx_truth_bed_inter, post_sim_call_bed_inter, post_sim_call_bed_multiinter],
         ['pre-sim call 1', 'pre-sim call 2', 'approximate truth', 'post-sim CN', 'int4'])
     logging.info(
-        f'{len(bed_interval_keys(post_sim_call_bed_multiinter))} shared intervals; '
+        f'{len(int4_keys)} shared intervals; '
         'row i of the narrowed pre-sim, truth, post-sim, and int4 BEDs is the same genomic interval. ')
 
     pre_sim_df_1_raw = pd.read_csv(cleaned_pre1, sep='\t', header=0)
@@ -737,7 +761,6 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
         if 'obsDP' not in dp_cols:
             raise ValueError(f'{post_sim_call_bed_by_DP_inter} has no obsDP column (header={dp_cols!r}). ')
         dp_idx = dp_cols.index('obsDP')
-        int4_keys = bed_interval_keys(post_sim_call_bed_multiinter)
         narrowed_keys = [(tokens[0], int(tokens[1]), int(tokens[2])) for tokens in dp_rows]
         if narrowed_keys == int4_keys:
             depth_obs = np.array([float(tokens[dp_idx]) for tokens in dp_rows], dtype=float)
@@ -748,8 +771,8 @@ def bedset_to_consistency(pre_sim_call_bed_1_fname, pre_sim_call_bed_2_fname, ap
             obs_list, base_list = project_obsdp_onto_reference(int4_keys, records)
             depth_obs = np.array(obs_list, dtype=float)
             depth_bases = np.array(base_list, dtype=int)
-            aligned_dp = new_bed_path(change_file_ext(post_sim_call_bed_int_fname, 'intersect_post_sim_DP.aligned.bed', 'bed'))
-            with open(aligned_dp, 'x') as aligned:
+            aligned_dp = _intermediate('intersect_post_sim_DP.aligned.bed')
+            with open(aligned_dp, 'w') as aligned:
                 aligned.write(dp_header if dp_header.endswith('\n') else dp_header + '\n')
                 for (chrom, start, end), dp in zip(int4_keys, obs_list):
                     fields = ['.'] * len(dp_cols)
@@ -910,4 +933,3 @@ def main():
             args.chrom, args.start, args.end, n_ref_bases=args.n_ref_bases, bp_window=args.bp_window)
 
 if __name__ == '__main__': main()
-
