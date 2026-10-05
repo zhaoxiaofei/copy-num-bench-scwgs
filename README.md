@@ -440,8 +440,9 @@ statistics and flagged naive comparisons:
   **per-donor caller medians** (rows `level = cluster` in `*.stats.friedman.tsv`; the cluster
   is the donor in Fig. 2), with the per-cell Friedman kept as a flagged naive row
   (`level = cell (naive)`); Kendall's W and per-caller mean ranks at both levels.
-* **Post-hoc pairwise:** two-sided Wilcoxon signed-rank tests on the **per-donor medians of
-  the paired differences** (reference caller vs. every other; `--stats-all-pairs` for all 36
+* **Post-hoc pairwise:** two-sided Wilcoxon signed-rank tests on the **per-donor differences
+  of the two callers' medians** (the same numbers as the paired differences of the columns of
+  the Friedman/MCB complete-block matrix; reference caller vs. every other; `--stats-all-pairs` for all 36
   pairs), plus the exact two-sided sign test (`pvalue_sign_test`) as an anchor for very small
   donor counts; Holm-Bonferroni correction within each (scenario, metric) family applied to
   the donor-level P values.  For the ploidy benchmark the same tests pair the per-sample

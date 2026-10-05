@@ -767,5 +767,24 @@ if shutil.which('tectonic'):
     assert ret.returncode == 0, ret.stderr[-1500:]
     print('OK F.5: both MCB tables compile with tectonic')
 
+# [B2 regression] In cluster mode the pairwise units are the paired differences
+# of the two callers' per-cluster medians - the columns of the Friedman/MCB
+# complete-block matrix - not the per-cluster median of the per-cell
+# differences (median(x-y) != median(x)-median(y)).
+_lab = ['d1'] * 4 + ['d2'] * 4
+_x = np.array([0., 1., 100., -5., 0., 2., 4., 4.])
+_y = np.array([-1., 89., 99., 100., 1., 1., 1., 9.])
+_b2 = stat_tests._pairwise_record(
+    _x, _y, _lab, {'metric': 'B2', 'caller_a': 'A', 'caller_b': 'B'},
+    cluster_agg='median', n_resamples=200, seed=1)
+_units = (pd.Series(_x, index=_lab).groupby(level=0).median()
+          - pd.Series(_y, index=_lab).groupby(level=0).median()).to_numpy()
+assert _b2['rank_biserial_r'] == stat_tests.rank_biserial_matched(_units)
+assert _b2['wilcoxon_W'] == stat_tests.wilcoxon_signed_rank(
+    _units, np.zeros_like(_units))['statistic']
+assert _b2['median_diff_a_minus_b'] == float(np.median(_units))
+assert float(np.median(_x - _y)) != _b2['median_diff_a_minus_b']
+print('OK G.1 [B2]: cluster pairwise units = difference of per-cluster medians')
+
 print('\nAll stat_tests end-to-end tests PASSED '
       '(including the independence-failure demonstration and Hsu\'s MCB)')

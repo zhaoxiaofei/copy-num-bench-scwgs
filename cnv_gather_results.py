@@ -53,6 +53,10 @@ def main():
     nan_keys = [
             "with_aneuploidy_aware_gametes.intCN_PCC", "with_aneuploidy_aware_gametes.nonintCN_PCC",
             "with_haploidy_assumed_gametes.intCN_PCC", "with_haploidy_assumed_gametes.nonintCN_PCC",
+            # [FIX 13] an undefined breakpoint F1 (no expected and no observed
+            # CN transition) is null/NaN, not a zero score: skip it in the mean
+            "with_aneuploidy_aware_gametes.breakpoint_f1score",
+            "with_haploidy_assumed_gametes.breakpoint_f1score",
     ]
     parser = argparse.ArgumentParser(description='Compute summary statistics related to mean (avg, sd) and median (min, Q1, Q2, Q3, max). ')
     #parser.add_argument('--caller', type=str, required=True, help='Single-cell copy-number caller (can be set to hmmcopy, ginkgo, etc.). ')
@@ -117,6 +121,18 @@ def main():
         for k,vs in sorted(key2vals.items()):
             if len(vs) != maxlen: logging.info(F'{caller}: Skipping the key {k} because the key is only present in {len(vs)} rows out of {maxlen} rows')
         key2vals = {k : vs for k,vs in sorted(key2vals.items()) if (len(vs) == maxlen)}
+        # [FIX 13] perf.json written before the null fix stores an undefined
+        # breakpoint F1 (no expected and no observed CN transition) as 0.
+        # Re-derive those cases from n_exp/n_obs so stale results are corrected
+        # too; the values are then skipped by nan_keys (nanmean) below.
+        for _pref in ('with_aneuploidy_aware_gametes', 'with_haploidy_assumed_gametes'):
+            _f1, _ne, _no = (F'{_pref}.breakpoint_f1score',
+                             F'{_pref}.breakpoint_n_exp', F'{_pref}.breakpoint_n_obs')
+            if _f1 in key2vals and _ne in key2vals and _no in key2vals:
+                key2vals[_f1] = [np.nan if (_e == 0 and _o == 0) else _v
+                                 for _v, _e, _o in zip(key2vals[_f1],
+                                                       key2vals[_ne],
+                                                       key2vals[_no])]
         caller_specific_df = pd.DataFrame(key2vals)
         long_dfs.append(caller_specific_df)
         for key in PERF_KEYS:

@@ -93,13 +93,15 @@ def _perf_legend(ref_desc, ref_is_constant_column=True):
         'derivations Hap\\_0 (haploidy-assumed) and Hap\\_1 (aneuploidy-aware; '
         'Fig.~1a). Each scenario reports, in this order, $n$, $p$, $r$, and the '
         '\\qty{95}{\\percent} confidence interval (CI). $n$ is the effective sample '
-        'size, that is, the number of donors whose paired per-cell differences enter '
-        'the test. $p$ is the two-sided Wilcoxon signed-rank test on per-donor medians '
-        'of the paired per-cell differences (reference vs.\\ caller $b$), '
+        'size, that is, the number of donors whose paired differences of the two '
+        'callers\' per-donor medians enter the test. $p$ is the two-sided Wilcoxon '
+        'signed-rank test on the per-donor differences of the callers\' medians '
+        '(reference vs.\\ caller $b$), '
         'Holm--Bonferroni-adjusted within each (scenario, metric) family and shown in '
         'bold at the 0.05 family-wise level. $r$ is the matched-pairs rank-biserial '
-        'correlation on the per-donor medians (positive means the reference outperforms '
-        'caller $b$). The \\qty{95}{\\percent} percentile-bootstrap CI of $r$ is '
+        'correlation on the per-donor differences of the callers\' medians (positive '
+        'means the reference outperforms caller $b$). The '
+        '\\qty{95}{\\percent} percentile-bootstrap CI of $r$ is '
         'obtained by resampling the donors. CN, copy-number; CNV, copy-number variation.'
     )
 
@@ -856,10 +858,11 @@ if args.source_data:
 # measured demonstration).
 #
 # [REV v3] The tests therefore run at the DONOR level by default (each donor is
-# one effective sample): per-donor medians of the per-cell differences are the
-# units of the Wilcoxon signed-rank and exact sign tests; Friedman on per-donor
-# caller medians; Holm on donor-level P; cluster bootstrap CIs; ICC /
-# design-effect / effective-n diagnostics per comparison.  The per-cell
+# one effective sample): per-donor medians of each caller are computed first
+# and their paired difference is the unit of the Wilcoxon signed-rank and exact
+# sign tests (the same numbers as the paired differences of the columns of the
+# Friedman/MCB complete-block matrix); Holm on donor-level P; unit-bootstrap
+# CIs; ICC / design-effect / effective-n diagnostics per comparison.  The per-cell
 # quantities remain in the outputs as descriptive statistics and as flagged
 # naive comparisons (pvalue_cell_naive).  Finer cluster keys
 # (--stats-cluster-key accession_1,accession_2,cellLine) are available as a

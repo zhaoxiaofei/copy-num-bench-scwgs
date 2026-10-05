@@ -282,7 +282,11 @@ def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200_000):
     CONSISTENCY on the shared segmentation (with the approximate truth projected onto it),
     not a classic breakpoint benchmark against the raw truth interval segmentation.
     Precision (recall) is reported as 0 when there is no observed (expected) CN
-    transition at all, because the ratio is undefined in that case.
+    transition at all, because the ratio is undefined in that case.  F1 is
+    reported as null when BOTH sides have no CN transition at all (0/0): a
+    perfectly flat call is then excluded from the F1 summaries (see
+    cnv_gather_results.py) instead of being scored like a breakpoint-spamming
+    call, whose F1 is a well-defined 0.
     """
     obs_df_1 = merge_bed_with_cn(obs_df, obs_col)
     exp_df_1 = merge_bed_with_cn(exp_df, exp_col)
@@ -331,7 +335,12 @@ def evaluate_breakpoints(obs_df, obs_col, exp_df, exp_col, window_size=200_000):
 
     precision = TP / n_obs if n_obs else 0
     recall = TP / n_exp if n_exp else 0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    if n_obs == 0 and n_exp == 0:
+        # [FIX 13] 0/0: F1 is undefined; null keeps it out of the mean instead
+        # of scoring a correct flat CN=2 call like a breakpoint false positive.
+        f1 = float('nan')
+    else:
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
 
     return {
         "TP": TP,

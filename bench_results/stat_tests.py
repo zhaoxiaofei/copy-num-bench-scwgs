@@ -105,15 +105,18 @@ comparisons:
   (`--cluster-key accession_1,accession_2,cellLine`) are available as a
   sensitivity analysis; `--cluster-key none` reverts to the naive per-cell
   tests.
-* Per comparison, the per-cell differences d = x - y are aggregated to
-  per-cluster medians d_g (one value per cluster); the two-sided Wilcoxon
-  signed-rank test and the exact two-sided sign test run on the d_g, and
-  Holm-Bonferroni is applied to the CLUSTER-level P values.
+* Per comparison, each caller's per-cell values are first aggregated to one
+  value per cluster (per-cluster medians by default) and the paired
+  difference of the two cluster-level values is tested: the two-sided
+  Wilcoxon signed-rank test and the exact two-sided sign test run on these
+  per-cluster differences - the same numbers as the paired differences of the
+  columns of the Friedman/MCB complete-block matrix - and Holm-Bonferroni is
+  applied to the CLUSTER-level P values.
 * The Friedman omnibus likewise runs on per-cluster caller medians (rows =
   clusters); the per-cell Friedman is kept as a 'cell (naive)' row.
-* The 95% CI of the median per-cell difference comes from a CLUSTER bootstrap
-  (clusters resampled with replacement, all of a cluster's cells kept
-  together), not from an i.i.d. cell bootstrap.
+* The 95% CIs of the median per-cluster difference and of r come from a
+  bootstrap that resamples the independent clusters (one value per cluster),
+  not from an i.i.d. cell bootstrap.
 * Diagnostics per comparison: ICC(1,1) (one-way ANOVA, method of moments) of
   the paired differences within clusters, the design effect, the effective
   sample size, and the naive-vs-cluster P-value ratio - the degree of
@@ -436,9 +439,10 @@ def bca_bootstrap_ci(d, statistic=np.median, n_resamples=10000,
                      confidence_level=0.95, seed=1):
     """BCa bootstrap CI of a statistic of paired differences (seeded).
 
-    NAIVE-MODE ONLY (assumes i.i.d. observations): used when clustering is
-    disabled (--cluster-key none). With clustered data use
-    cluster_bootstrap_median_ci instead.
+    The observations must be i.i.d. AT THE INFERENCE LEVEL: the raw per-unit
+    differences in naive mode (--cluster-key none), or the one-value-per-
+    cluster differences in cluster mode (the independent clusters are then
+    the resampling units).
     Falls back to the percentile method for degenerate samples, then to the
     point estimate itself.
     """
@@ -517,8 +521,9 @@ def bootstrap_r_ci(units, n_resamples=2000, confidence_level=0.95, seed=1):
     """Percentile-bootstrap CI of the matched-pairs rank-biserial effect size r.
 
     `units` are the i.i.d. paired differences AT THE INFERENCE LEVEL: the
-    per-cluster (donor) medians in cluster mode, or the raw per-cell
-    differences in naive mode. The independent units are resampled with
+    per-cluster (donor) differences of the two callers' per-cluster
+    aggregates in cluster mode, or the raw per-cell differences in naive
+    mode. The independent units are resampled with
     replacement, r is recomputed on every resample, and the percentile
     interval of the r distribution is returned. This targets the same estimand
     as the reported rank_biserial_r, so (r, CI) describe ONE effect size.
@@ -536,10 +541,20 @@ def bootstrap_r_ci(units, n_resamples=2000, confidence_level=0.95, seed=1):
         return point, point, 'degenerate sample (all differences equal)'
     rng = np.random.default_rng(seed)
     b = int(n_resamples)
+    m = len(u)
+    total = m * (m + 1.0) / 2.0
     rs = np.empty(b, dtype=float)
-    for i in range(b):
-        pick = rng.integers(0, len(u), len(u))
-        rs[i] = rank_biserial_matched(u[pick])
+    # Vectorised resampling in chunks of resamples (bounds the b x m memory;
+    # m is small in cluster mode but can be large in naive mode).
+    chunk = max(1, int(2_000_000 // max(m, 1)))
+    for start in range(0, b, chunk):
+        stop = min(start + chunk, b)
+        du = u[rng.integers(0, m, size=(stop - start, m))]
+        ranks = sps.rankdata(np.abs(du), axis=1)
+        # zsplit: the two half-rank contributions of the zero differences
+        # cancel, so r = (R+ - R-) / (m(m+1)/2).
+        rs[start:stop] = (np.sum(ranks * (du > 0), axis=1)
+                          - np.sum(ranks * (du < 0), axis=1)) / total
     a = 1.0 - float(confidence_level)
     lo, hi = np.quantile(rs, [a / 2.0, 1.0 - a / 2.0])
     return float(lo), float(hi), 'unit-percentile'
@@ -718,9 +733,11 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
                      seed=1, cluster_key_str=''):
     """One pairwise-comparison record.
 
-    Primary inference on the CLUSTER level (per-cluster/donor aggregation of
-    the per-cell differences), naive per-cell comparison kept for
-    transparency.
+    Primary inference on the CLUSTER level: each caller's per-cell values are
+    aggregated to one value per cluster first and the paired difference of
+    those two cluster-level values is tested - identical to the paired
+    differences of the columns of the Friedman/MCB complete-block matrix.
+    The naive per-cell comparison is kept for transparency.
     x, y: paired per-cell (or per-dataset) values, equal length; labels:
     cluster id per element (None -> naive mode). base: dict with the identity
     columns (scenario/metric/caller_a/caller_b or plot/method_a/method_b).
@@ -752,14 +769,18 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
         'n_zero_diffs': w_cell['n_zero'],
     })
     if labels is not None:
-        cl_ser = pd.Series(d, index=pd.Index(labels, dtype=object))
-        cm = cl_ser.groupby(level=0).agg(cluster_agg).sort_index()
-        cm_v = cm.to_numpy(dtype=float)
+        cl_idx = pd.Index(labels, dtype=object)
+        x_cl = pd.Series(x, index=cl_idx).groupby(level=0).agg(cluster_agg).sort_index()
+        y_cl = pd.Series(y, index=cl_idx).groupby(level=0).agg(cluster_agg).sort_index()
+        # Difference of the two callers' per-cluster aggregates (the columns of
+        # the Friedman/MCB complete-block matrix), not the per-cluster median
+        # of the per-cell differences: median(x-y) != median(x)-median(y).
+        cm_v = (x_cl - y_cl).to_numpy(dtype=float)
         w_cl = wilcoxon_signed_rank(cm_v, np.zeros_like(cm_v))
         st = sign_test_two_sided(cm_v)
         n_boot = int(min(n_resamples, MAX_CLUSTER_BOOTSTRAP))
-        ci_lo, ci_hi, ci_method = cluster_bootstrap_median_ci(
-            d, labels, np.median, n_resamples=max(n_boot, 200), seed=seed)
+        ci_lo, ci_hi, ci_method = bca_bootstrap_ci(
+            cm_v, np.median, n_resamples=max(n_boot, 200), seed=seed)
         r_lo, r_hi, r_ci_method = bootstrap_r_ci(
             cm_v, n_resamples=max(n_boot, 200), seed=seed)
         icc = icc_design_effect(d, labels)
@@ -771,6 +792,11 @@ def _pairwise_record(x, y, labels, base, cluster_agg='median', n_resamples=10000
             'pvalue_sign_test': st['pvalue'],
             'rank_biserial_r': rank_biserial_matched(cm_v),
             'ci95_r_low': r_lo, 'ci95_r_high': r_hi, 'ci_r_method': r_ci_method,
+            'median_diff_a_minus_b': (float(np.median(cm_v)) if len(cm_v)
+                                      else float('nan')),
+            'mean_diff_a_minus_b': (float(np.mean(cm_v)) if len(cm_v)
+                                    else float('nan')),
+            'cl_effect_paired': common_language_paired(cm_v),
             'ci95_median_diff_low': ci_lo, 'ci95_median_diff_high': ci_hi,
             'ci_method': ci_method,
             'icc_within_cluster_d': icc['icc'],
@@ -896,15 +922,17 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                    'results are positively correlated within donors',
         'cluster_key': cluster_cols,
         'cluster_key_source': cluster_key_source,
-        'aggregation': F'per-cluster {cluster_agg} of the per-cell paired '
-                       'differences (donor level by default)',
+        'aggregation': F'per-cluster {cluster_agg} of each caller\'s per-cell '
+                       'values, then the paired difference of those cluster-level '
+                       'values (donor level by default)',
         'inference_level': ('cluster (independent experimental units)'
                             if can_cluster else
                             'cell (NAIVE - independence assumed; pseudoreplication risk)'),
         'primary_tests': ('two-sided Wilcoxon signed-rank + exact sign test on '
-                          'per-independent-unit (donor by default) medians; Friedman '
-                          'on the same per-unit caller medians; Holm-Bonferroni on '
-                          'unit-level P; unit-cluster bootstrap 95% CI'
+                          'per-independent-unit (donor by default) differences of the '
+                          'per-caller medians; Friedman on the same per-unit caller '
+                          'medians; Holm-Bonferroni on unit-level P; unit-level '
+                          'bootstrap 95% CI'
                           if can_cluster else
                           'two-sided Wilcoxon signed-rank per cell; Friedman per cell; '
                           'BCa 95% CI (all NAIVE)'),
@@ -943,8 +971,8 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                         "('cluster' rows) and at the per-cell level "
                         "('cell (naive)' rows)",
         'posthoc_test': ('two-sided Wilcoxon signed-rank + exact sign test on '
-                         'per-cluster (donor-level by default) medians of the '
-                         'paired differences '
+                         'per-cluster (donor-level by default) differences of the '
+                         'per-caller medians '
                          "(zero_method='zsplit', continuity correction)"
                          if can_cluster else
                          "two-sided Wilcoxon signed-rank paired per cell "
@@ -955,8 +983,8 @@ def run_caller_benchmark_stats(df, out_prefix, perf_metrics, gamete_type2short,
                         'Holm within each (metric) family across callers)',
         'effect_sizes': ['matched-pairs rank-biserial r (cluster/donor level) with '
                          'a 95% percentile-bootstrap CI over the independent units',
-                         'paired common-language effect size (cell population)',
-                         'median per-cell difference with cluster-bootstrap 95% CI'],
+                         'paired common-language effect size (independent units)',
+                         'median per-cluster difference with unit-bootstrap 95% CI'],
         'tail': 'two-sided (two-tailed) for all tests',
         'reference_caller': reference,
         'all_pairs': bool(all_pairs),
@@ -1243,19 +1271,21 @@ def run_ploidy_benchmark_stats(tab, out_prefix, reference='ginkgo|10',
             'missing_donor_policy': "datasets without donor metadata collapse into one "
                                     "shared '(missing)' cluster per plot group (conservative)",
             'per_plot_group': per_group_info,
-            'aggregation': F'per-cluster {cluster_agg} of the per-dataset paired differences',
+            'aggregation': F'per-cluster {cluster_agg} of each method\'s per-dataset '
+                           'values, then the paired difference of those cluster-level values',
             'diagnostics': 'ICC(1,1) of the paired differences within clusters; design '
                            'effect; n_effective; p_inflation_ratio = cluster P / naive P',
         },
         'omnibus_test': 'Friedman per plot group across methods at the cluster level '
                         "('cluster' rows) and per-dataset level ('dataset (naive)' rows)",
-        'posthoc_test': 'two-sided Wilcoxon signed-rank + exact sign test on per-cluster '
-                        'medians, paired by dataset; Holm-Bonferroni within each plot group',
+        'posthoc_test': 'two-sided Wilcoxon signed-rank + exact sign test on the '
+                        'per-cluster differences of the per-method values, paired by '
+                        'dataset; Holm-Bonferroni within each plot group',
         'effect_sizes': ['matched-pairs rank-biserial r (cluster level) with a '
                          '95% percentile-bootstrap CI over the independent units',
-                         'paired common-language effect size (dataset population)',
-                         'median per-dataset difference (percentage points) with '
-                         'cluster-bootstrap 95% CI'],
+                         'paired common-language effect size (independent units)',
+                         'median per-cluster difference (percentage points) with '
+                         'unit-bootstrap 95% CI'],
         'tail': 'two-sided (two-tailed) for all tests',
         'reference_method': reference,
         'bootstrap_n_resamples': int(n_resamples),
