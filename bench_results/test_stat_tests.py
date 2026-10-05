@@ -110,6 +110,8 @@ need_cols = ['inference_level', 'cluster_key', 'n_clusters', 'n_cells_paired',
              'rank_biserial_r', 'ci95_r_low', 'ci95_r_high',
              'cl_effect_paired', 'ci95_median_diff_low',
              'ci95_median_diff_high', 'pvalue_cell_naive',
+             'median_diff_cell_paired_naive', 'mean_diff_cell_paired_naive',
+             'cl_effect_cell_paired_naive',
              'rank_biserial_r_cell_naive', 'icc_within_cluster_d',
              'design_effect', 'n_effective_cells', 'p_inflation_ratio']
 missing = [c for c in need_cols if c not in pw.columns]
@@ -784,7 +786,27 @@ assert _b2['wilcoxon_W'] == stat_tests.wilcoxon_signed_rank(
     _units, np.zeros_like(_units))['statistic']
 assert _b2['median_diff_a_minus_b'] == float(np.median(_units))
 assert float(np.median(_x - _y)) != _b2['median_diff_a_minus_b']
+# both statistics are kept, with the cell-paired one explicitly named
+assert _b2['median_diff_cell_paired_naive'] == float(np.median(_x - _y))
+assert _b2['mean_diff_cell_paired_naive'] == float(np.mean(_x - _y))
+assert _b2['cl_effect_cell_paired_naive'] == stat_tests.common_language_paired(_x - _y)
 print('OK G.1 [B2]: cluster pairwise units = difference of per-cluster medians')
+
+# [FIX 14] pooled breakpoint-level helper: one datapoint per matched breakpoint
+sys.path.insert(0, REPO)
+import cnv_gather_results as _gather  # noqa: E402
+_kv = {'overall_ploidy': ['diploid', 'diploid', 'aneuploid', 'aneuploid'],
+       'with_haploidy_assumed_gametes.breakpoint_TP': [0, 0, 3, 1],
+       'with_haploidy_assumed_gametes.breakpoint_FP': [2, 0, 1, 0],
+       'with_haploidy_assumed_gametes.breakpoint_FN': [0, 0, 0, 1],
+       'with_haploidy_assumed_gametes.breakpoint_n_obs': [2, 0, 4, 1],
+       'with_haploidy_assumed_gametes.breakpoint_n_exp': [0, 0, 3, 2]}
+_pool = {r['cell_subset']: r for r in _gather.pooled_breakpoint_rows('x', _kv)}
+assert _pool['all']['TP'] == 4 and _pool['all']['FP'] == 3 and _pool['all']['FN'] == 1
+assert abs(_pool['aneuploid']['breakpoint_pooled_f1score'] - 0.8) < 1e-12
+assert _pool['diploid']['breakpoint_pooled_f1score'] == 0.0
+assert abs(_pool['all']['breakpoint_pooled_precision'] - 4 / 7) < 1e-12
+print('OK G.2 [FIX 14]: pooled breakpoint-level metrics (auxiliary file only)')
 
 print('\nAll stat_tests end-to-end tests PASSED '
       '(including the independence-failure demonstration and Hsu\'s MCB)')

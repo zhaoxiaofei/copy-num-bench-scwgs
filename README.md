@@ -95,6 +95,12 @@ cat ${BENCHMARK_RESULT_FILE_PREFIX}.long.tsv | \
         -o ${BENCHMARK_RESULT_FILE_PREFIX}.plots
 ```
 
+The collector also writes `<prefix>.breakpoint_pooled.tsv`: pooled
+breakpoint-level precision/recall/F1 per caller, ground-truth scenario and cell
+subset (all / aneuploid / diploid), computed from the per-cell TP/FP/FN counts.
+It is an auxiliary table for manual checks only -- the Fig. 2 datapoint remains
+the per-cell F1, and no figure or statistical test reads this file.
+
 `-t 0` writes all figures (`<prefix>.plots-all.pdf`, 22 pages, = SI Figs. S1-S22) plus the
 main-text figures (`<prefix>.plots_final_grid.*`, `<prefix>.plots_main.*`,
 `<prefix>.plots_multirow_main.*`).  `-t 2` redraws only the main figures.
@@ -450,12 +456,19 @@ statistics and flagged naive comparisons:
   HCC1395 / HeLa / ACT), aggregated to the chosen cluster level.
 * **Effect sizes:** donor/cluster-level matched-pairs rank-biserial correlation r (positive =
   reference better) with a **95% percentile-bootstrap CI** obtained by resampling the
-  independent units (`ci95_r_low`/`ci95_r_high`), the paired common-language effect size
-  P(ref > other) + 0.5 P(tie) on the cell population, and the median per-cell difference
-  with a **cluster bootstrap 95% CI**
-  (donors/clusters resampled with replacement, all cells of a drawn donor kept together;
+  independent units (`ci95_r_low`/`ci95_r_high`); the primary median difference and the
+  common-language effect size P(ref > other) + 0.5 P(tie) are computed on the differences
+  of the per-donor caller medians (the Friedman/MCB units), with a **unit bootstrap 95% CI**
+  for the median
+  (donors/clusters resampled with replacement;
   10,000 resamples requested by default, capped at 5,000 for runtime; seeded, so all
-  intervals are exactly reproducible).  For the ploidy table the runs of one biological
+  intervals are exactly reproducible).  The cell-PAIRED descriptives
+  (`median_diff_cell_paired_naive`, `mean_diff_cell_paired_naive`,
+  `cl_effect_cell_paired_naive`: median/mean of the per-cell d = x - y and its
+  common-language effect on the cell population) are kept in the TSVs for
+  heterogeneity/skew checks - they answer a different question than the primary
+  material-level columns and can disagree when the per-cell advantage is heterogeneous
+  or the scores are skewed.  For the ploidy table the runs of one biological
   sample are merged into a single effective sample FIRST (see the Fig. 3 bullet above), so
   each merged sample contributes exactly one paired difference, one rank and one bootstrap
   unit -- the effect sizes of the correlated runs are therefore merged (the merged sample's

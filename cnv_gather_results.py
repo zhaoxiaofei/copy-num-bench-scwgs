@@ -12,6 +12,59 @@ import pandas as pd
 
 logging.basicConfig(level=logging.DEBUG)
 
+
+def pooled_breakpoint_rows(caller, key2vals):
+    """Pooled breakpoint-level precision/recall/F1 per scenario and cell subset.
+
+    Sums the per-cell TP/FP/FN counts of every perf.json, so that one matched
+    breakpoint is one datapoint - the breakpoint-level counterpart of the
+    per-cell F1 means in the *.short.tsv.  [FIX 14] The result is written only
+    to <prefix>.breakpoint_pooled.tsv for manual checking; no figure or
+    statistical-test script reads it (the Fig. 2 datapoint stays the cell).
+    """
+    ploidy = key2vals.get('overall_ploidy')
+    rows = []
+    for pref in ('with_aneuploidy_aware_gametes', 'with_haploidy_assumed_gametes'):
+        counts = {}
+        for kind in ('TP', 'FP', 'FN', 'n_obs', 'n_exp'):
+            values = key2vals.get(F'{pref}.breakpoint_{kind}')
+            if values is None:
+                break
+            counts[kind] = values
+        if len(counts) < 5:
+            continue
+        n_files = len(counts['TP'])
+        subsets = [('all', list(range(n_files)))]
+        if ploidy is not None and len(ploidy) == n_files:
+            for label in ('aneuploid', 'diploid'):
+                idx = [i for i, v in enumerate(ploidy)
+                       if str(v).strip().lower() == label]
+                if idx:
+                    subsets.append((label, idx))
+        for label, idx in subsets:
+            def total(kind):
+                vals = [np.nan if counts[kind][i] is None else float(counts[kind][i])
+                        for i in idx]
+                return float(np.nansum(vals))
+            tp, fp, fn = total('TP'), total('FP'), total('FN')
+            n_obs, n_exp = total('n_obs'), total('n_exp')
+            precision = tp / (tp + fp) if (tp + fp) else float('nan')
+            recall = tp / (tp + fn) if (tp + fn) else float('nan')
+            if np.isfinite(precision) and np.isfinite(recall) and precision + recall > 0:
+                f1 = 2.0 * precision * recall / (precision + recall)
+            elif n_obs == 0 and n_exp == 0:
+                f1 = float('nan')          # 0/0, same rule as the per-cell metric
+            else:
+                f1 = 0.0
+            rows.append({'Caller': caller, 'scenario': pref, 'cell_subset': label,
+                         'TP': tp, 'FP': fp, 'FN': fn,
+                         'n_obs': n_obs, 'n_exp': n_exp,
+                         'breakpoint_pooled_precision': precision,
+                         'breakpoint_pooled_recall': recall,
+                         'breakpoint_pooled_f1score': f1})
+    return rows
+
+
 def main():
     PERF_KEYS = [
         "bed_1_cn0_genome_size",
@@ -66,6 +119,7 @@ def main():
     
     long_dfs = []
     listof_dicts = []
+    pooled_rows = []
     for caller in ['hmmcopy', 'ginkgo', 'copynumber', 'secnv', 'sccnv', 'scyn', 'chisel', 'aneufinder', 'flcna']:
         filenames = [filename for filename in args.infiles if F'_{caller}_' in filename.split('/')[-1]]
         if not filenames:
@@ -135,6 +189,7 @@ def main():
                                                        key2vals[_no])]
         caller_specific_df = pd.DataFrame(key2vals)
         long_dfs.append(caller_specific_df)
+        pooled_rows.extend(pooled_breakpoint_rows(caller, key2vals))
         for key in PERF_KEYS:
             vals = key2vals[key]
             # [FIX 10] perf.json is strict JSON now: an undefined metric (e.g. a PCC of a
@@ -158,6 +213,11 @@ def main():
     df = pd.DataFrame(listof_dicts)
     df = df.sort_values(['metric', 'Caller'])
     df.to_csv(args.outprefix + '.short.tsv', sep='\t', index=False, na_rep='NA')
+    if pooled_rows:
+        pooled_df = pd.DataFrame(pooled_rows)
+        pooled_df.to_csv(args.outprefix + '.breakpoint_pooled.tsv', sep='\t',
+                         index=False, na_rep='NA')
+        logging.info(F'pooled breakpoint-level metrics written to {args.outprefix}.breakpoint_pooled.tsv')
     with open(args.outprefix + '.cmd.sh', 'w') as file: file.write('\\\n\t'.join(sys.argv))
 
 if __name__ == '__main__': main()
